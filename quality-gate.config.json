@@ -1,0 +1,140 @@
+{
+  "$schema": "./quality-gate-schema.json",
+  "comment": "Vibecoding Stack Quality Gate Configuration",
+  
+  "version": "1.0.0",
+  
+  "checks": {
+    "tests": {
+      "enabled": true,
+      "required": true,
+      "minCoverage": 70,
+      "commands": {
+        "node": "npm test -- --coverage --passWithNoTests",
+        "python": "pytest --cov=. --cov-report=term-missing",
+        "go": "go test -cover ./..."
+      }
+    },
+    
+    "lint": {
+      "enabled": true,
+      "required": true,
+      "commands": {
+        "node": "npm run lint",
+        "python": "ruff check . || pylint **/*.py",
+        "go": "golangci-lint run"
+      }
+    },
+    
+    "types": {
+      "enabled": true,
+      "required": false,
+      "commands": {
+        "node": "npx tsc --noEmit",
+        "python": "mypy . --ignore-missing-imports",
+        "go": "go vet ./..."
+      }
+    },
+    
+    "format": {
+      "enabled": true,
+      "required": false,
+      "autoFix": true,
+      "commands": {
+        "node": "npx prettier --check .",
+        "python": "black --check .",
+        "go": "gofmt -l ."
+      },
+      "fixCommands": {
+        "node": "npx prettier --write .",
+        "python": "black .",
+        "go": "gofmt -w ."
+      }
+    },
+    
+    "security": {
+      "enabled": true,
+      "required": false,
+      "blockOnHigh": true,
+      "commands": {
+        "node": "npm audit --audit-level=high",
+        "python": "bandit -r . -ll && safety check",
+        "go": "gosec ./..."
+      }
+    },
+    
+    "build": {
+      "enabled": true,
+      "required": true,
+      "commands": {
+        "node": "npm run build",
+        "python": "python -m build",
+        "go": "go build ./..."
+      }
+    }
+  },
+  
+  "verification": {
+    "enabled": true,
+    "useAgent": true,
+    "agentModel": "claude-sonnet-4-20250514",
+    "maxTurns": 5,
+    "checklist": [
+      "All test cases from feature spec are covered",
+      "Error handling is complete",
+      "Edge cases are handled",
+      "No security vulnerabilities",
+      "Code follows project patterns"
+    ]
+  },
+  
+  "hooks": {
+    "preCommit": {
+      "enabled": true,
+      "checks": ["format", "lint", "types"],
+      "blockOnFailure": false
+    },
+    "prePush": {
+      "enabled": true,
+      "checks": ["tests", "build"],
+      "blockOnFailure": true
+    },
+    "preMerge": {
+      "enabled": true,
+      "checks": ["tests", "lint", "types", "security", "build"],
+      "blockOnFailure": true,
+      "requireApproval": true
+    }
+  },
+  
+  "thresholds": {
+    "coverage": {
+      "minimum": 70,
+      "target": 80,
+      "strict": false
+    },
+    "duplicates": {
+      "maximum": 5,
+      "strict": false
+    },
+    "complexity": {
+      "maximum": 15,
+      "strict": false
+    }
+  },
+  
+  "ignore": {
+    "files": [
+      "**/*.test.ts",
+      "**/*.spec.ts",
+      "**/test/**",
+      "**/tests/**",
+      "**/__tests__/**",
+      "**/node_modules/**",
+      "**/dist/**",
+      "**/build/**",
+      "**/.git/**"
+    ],
+    "rules": []
+  }
+}

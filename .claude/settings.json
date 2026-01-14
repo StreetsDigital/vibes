@@ -1,0 +1,135 @@
+{
+  "$schema": "https://code.claude.com/settings-schema.json",
+  "comment": "Vibecoding Stack - Quality Gates Configuration",
+  
+  "permissions": {
+    "allow": [
+      "Bash(git status)",
+      "Bash(git diff:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(git branch:*)",
+      "Bash(git checkout:*)",
+      "Bash(npm run:*)",
+      "Bash(npm test:*)",
+      "Bash(npm install:*)",
+      "Bash(npx:*)",
+      "Bash(pytest:*)",
+      "Bash(python:*)",
+      "Bash(pip:*)",
+      "Bash(go:*)",
+      "Bash(cargo:*)",
+      "Bash(make:*)",
+      "Bash(cat:*)",
+      "Bash(head:*)",
+      "Bash(tail:*)",
+      "Bash(grep:*)",
+      "Bash(find:*)",
+      "Bash(ls:*)",
+      "Bash(mkdir:*)",
+      "Bash(cp:*)",
+      "Bash(mv:*)"
+    ],
+    "deny": [
+      "Read(.env*)",
+      "Read(*.pem)",
+      "Read(*.key)",
+      "Read(*secret*)",
+      "Read(*credential*)",
+      "Bash(rm -rf:*)",
+      "Bash(rm -r /*)",
+      "Bash(sudo:*)",
+      "Bash(chmod 777:*)",
+      "Bash(curl:*|sh)",
+      "Bash(wget:*|sh)",
+      "Bash(*DROP TABLE*)",
+      "Bash(*DELETE FROM*)",
+      "Bash(*TRUNCATE*)",
+      "Edit(.env*)",
+      "Edit(*.pem)",
+      "Edit(*.key)"
+    ]
+  },
+  
+  "hooks": {
+    "PreToolUse": [
+      {
+        "comment": "Block dangerous file operations",
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo \"$TOOL_INPUT\" | grep -qE '(rm -rf /|sudo rm|DROP TABLE|DELETE FROM|> /dev)' && { echo 'BLOCKED: Dangerous command detected'; exit 1; } || exit 0"
+          }
+        ]
+      },
+      {
+        "comment": "Warn on production file edits",
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "FILE=$(echo \"$TOOL_INPUT\" | jq -r '.file_path // .path // \"\"'); if echo \"$FILE\" | grep -qE '(prod|production|\\.env)'; then echo \"WARNING: Editing production file: $FILE\"; fi; exit 0"
+          }
+        ]
+      }
+    ],
+    
+    "PostToolUse": [
+      {
+        "comment": "Auto-format TypeScript/JavaScript files",
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "FILE=$(echo \"$TOOL_INPUT\" | jq -r '.file_path // .path // \"\"'); if echo \"$FILE\" | grep -qE '\\.(ts|tsx|js|jsx|json)$'; then npx prettier --write \"$FILE\" 2>/dev/null || true; fi"
+          }
+        ]
+      },
+      {
+        "comment": "Auto-format Python files",
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "FILE=$(echo \"$TOOL_INPUT\" | jq -r '.file_path // .path // \"\"'); if echo \"$FILE\" | grep -qE '\\.py$'; then black \"$FILE\" 2>/dev/null || ruff format \"$FILE\" 2>/dev/null || true; fi"
+          }
+        ]
+      },
+      {
+        "comment": "Run quick lint check on edited files",
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "FILE=$(echo \"$TOOL_INPUT\" | jq -r '.file_path // .path // \"\"'); if echo \"$FILE\" | grep -qE '\\.(ts|tsx|js|jsx)$'; then npx eslint --fix \"$FILE\" 2>/dev/null || true; fi"
+          }
+        ]
+      }
+    ],
+    
+    "Stop": [
+      {
+        "comment": "Log session activity",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo \"$(date '+%Y-%m-%d %H:%M:%S') - Session ended: $CONVERSATION_SUMMARY\" >> ~/.claude/activity.log 2>/dev/null || true"
+          }
+        ]
+      }
+    ]
+  },
+  
+  "model": {
+    "default": "claude-sonnet-4-20250514",
+    "thinking": "claude-opus-4-20250514"
+  },
+  
+  "behavior": {
+    "autoApproveReads": true,
+    "autoApproveWrites": false,
+    "planModeDefault": true
+  }
+}

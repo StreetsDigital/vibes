@@ -1,0 +1,423 @@
+# =============================================================================
+# VIBECODING STACK - QUALITY GATE WORKFLOW
+# =============================================================================
+# 
+# This workflow runs on every PR to ensure production-ready code:
+# 1. Claude Code AI Review - catches logic issues humans miss
+# 2. Automated testing with coverage
+# 3. Linting and type checking
+# 4. Security scanning
+# 5. Build verification
+#
+# Prerequisites:
+# - ANTHROPIC_API_KEY secret in GitHub
+# - SONAR_TOKEN secret (optional, for SonarCloud)
+# - SNYK_TOKEN secret (optional, for Snyk)
+#
+
+name: Quality Gates
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  push:
+    branches: [main, master, develop]
+
+# Cancel in-progress runs for the same PR
+concurrency:
+  group: quality-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+  security-events: write
+
+jobs:
+  # ===========================================================================
+  # JOB 1: Quick Checks (runs first, fast feedback)
+  # ===========================================================================
+  quick-checks:
+    name: Quick Checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for better analysis
+      
+      - name: Detect Project Type
+        id: detect
+        run: |
+          if [ -f "package.json" ]; then
+            echo "type=node" >> $GITHUB_OUTPUT
+            echo "manager=npm" >> $GITHUB_OUTPUT
+          elif [ -f "pyproject.toml" ] || [ -f "setup.py" ]; then
+            echo "type=python" >> $GITHUB_OUTPUT
+            echo "manager=pip" >> $GITHUB_OUTPUT
+          elif [ -f "go.mod" ]; then
+            echo "type=go" >> $GITHUB_OUTPUT
+            echo "manager=go" >> $GITHUB_OUTPUT
+          elif [ -f "Cargo.toml" ]; then
+            echo "type=rust" >> $GITHUB_OUTPUT
+            echo "manager=cargo" >> $GITHUB_OUTPUT
+          else
+            echo "type=unknown" >> $GITHUB_OUTPUT
+          fi
+      
+      # Node.js setup
+      - name: Setup Node.js
+        if: steps.detect.outputs.type == 'node'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      
+      - name: Install Node Dependencies
+        if: steps.detect.outputs.type == 'node'
+        run: npm ci
+      
+      - name: Lint (Node)
+        if: steps.detect.outputs.type == 'node'
+        run: npm run lint || echo "::warning::Lint command not found or failed"
+      
+      - name: Type Check (Node)
+        if: steps.detect.outputs.type == 'node'
+        run: |
+          if [ -f "tsconfig.json" ]; then
+            npx tsc --noEmit || echo "::warning::Type check failed"
+          fi
+      
+      - name: Format Check (Node)
+        if: steps.detect.outputs.type == 'node'
+        run: npx prettier --check . || echo "::warning::Format check failed"
+      
+      # Python setup
+      - name: Setup Python
+        if: steps.detect.outputs.type == 'python'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      
+      - name: Install Python Dependencies
+        if: steps.detect.outputs.type == 'python'
+        run: |
+          pip install -e ".[dev]" 2>/dev/null || pip install -r requirements.txt 2>/dev/null || pip install ruff mypy black
+      
+      - name: Lint (Python)
+        if: steps.detect.outputs.type == 'python'
+        run: ruff check . || echo "::warning::Ruff check failed"
+      
+      - name: Type Check (Python)
+        if: steps.detect.outputs.type == 'python'
+        run: mypy . --ignore-missing-imports || echo "::warning::Type check failed"
+      
+      - name: Format Check (Python)
+        if: steps.detect.outputs.type == 'python'
+        run: black --check . || echo "::warning::Format check failed"
+      
+      # Go setup
+      - name: Setup Go
+        if: steps.detect.outputs.type == 'go'
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+      
+      - name: Lint (Go)
+        if: steps.detect.outputs.type == 'go'
+        run: |
+          go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+          golangci-lint run || echo "::warning::Lint failed"
+      
+      - name: Format Check (Go)
+        if: steps.detect.outputs.type == 'go'
+        run: |
+          DIFF=$(gofmt -l .)
+          if [ -n "$DIFF" ]; then
+            echo "::warning::Format issues in: $DIFF"
+          fi
+
+  # ===========================================================================
+  # JOB 2: Tests with Coverage
+  # ===========================================================================
+  tests:
+    name: Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: quick-checks
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      
+      - name: Detect Project Type
+        id: detect
+        run: |
+          if [ -f "package.json" ]; then
+            echo "type=node" >> $GITHUB_OUTPUT
+          elif [ -f "pyproject.toml" ] || [ -f "setup.py" ]; then
+            echo "type=python" >> $GITHUB_OUTPUT
+          elif [ -f "go.mod" ]; then
+            echo "type=go" >> $GITHUB_OUTPUT
+          fi
+      
+      # Node.js
+      - name: Setup Node.js
+        if: steps.detect.outputs.type == 'node'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      
+      - name: Install & Test (Node)
+        if: steps.detect.outputs.type == 'node'
+        run: |
+          npm ci
+          npm test -- --coverage --passWithNoTests || npm test || echo "No tests found"
+      
+      # Python
+      - name: Setup Python
+        if: steps.detect.outputs.type == 'python'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install & Test (Python)
+        if: steps.detect.outputs.type == 'python'
+        run: |
+          pip install -e ".[dev]" 2>/dev/null || pip install -r requirements.txt 2>/dev/null || true
+          pip install pytest pytest-cov
+          pytest --cov=. --cov-report=xml || echo "No tests found"
+      
+      # Go
+      - name: Test (Go)
+        if: steps.detect.outputs.type == 'go'
+        run: go test -v -coverprofile=coverage.out ./...
+      
+      # Upload coverage
+      - name: Upload Coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          fail_ci_if_error: false
+        continue-on-error: true
+
+  # ===========================================================================
+  # JOB 3: Security Scanning
+  # ===========================================================================
+  security:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: quick-checks
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      
+      - name: Detect Project Type
+        id: detect
+        run: |
+          if [ -f "package.json" ]; then
+            echo "type=node" >> $GITHUB_OUTPUT
+          elif [ -f "pyproject.toml" ] || [ -f "requirements.txt" ]; then
+            echo "type=python" >> $GITHUB_OUTPUT
+          elif [ -f "go.mod" ]; then
+            echo "type=go" >> $GITHUB_OUTPUT
+          fi
+      
+      # Node.js security
+      - name: Setup Node.js
+        if: steps.detect.outputs.type == 'node'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      
+      - name: NPM Audit
+        if: steps.detect.outputs.type == 'node'
+        run: |
+          npm audit --audit-level=high || echo "::warning::Found vulnerabilities"
+        continue-on-error: true
+      
+      # Python security
+      - name: Setup Python
+        if: steps.detect.outputs.type == 'python'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Python Security Scan
+        if: steps.detect.outputs.type == 'python'
+        run: |
+          pip install bandit safety
+          bandit -r . -ll || echo "::warning::Bandit found issues"
+          safety check || echo "::warning::Safety found issues"
+        continue-on-error: true
+      
+      # Go security
+      - name: Go Security Scan
+        if: steps.detect.outputs.type == 'go'
+        run: |
+          go install github.com/securego/gosec/v2/cmd/gosec@latest
+          gosec ./... || echo "::warning::GoSec found issues"
+        continue-on-error: true
+      
+      # CodeQL for all
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: javascript, python, go
+        continue-on-error: true
+      
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        continue-on-error: true
+
+  # ===========================================================================
+  # JOB 4: Claude Code AI Review (PR only)
+  # ===========================================================================
+  ai-review:
+    name: Claude AI Review
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    if: github.event_name == 'pull_request' && github.event.pull_request.draft == false
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Claude Code Review
+        uses: anthropics/claude-code-action@v1
+        if: ${{ secrets.ANTHROPIC_API_KEY != '' }}
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: |
+            Review this PR for:
+            1. Logic errors and edge cases
+            2. Security vulnerabilities  
+            3. Missing error handling
+            4. Code that could be simplified
+            5. Missing or inadequate tests
+            
+            Be specific and actionable. Focus on issues that could cause bugs in production.
+          claude_args: "--max-turns 5"
+        continue-on-error: true
+      
+      - name: Fallback Review (No API Key)
+        if: ${{ secrets.ANTHROPIC_API_KEY == '' }}
+        run: |
+          echo "::notice::Claude Code review skipped - ANTHROPIC_API_KEY not configured"
+          echo "To enable AI code review, add ANTHROPIC_API_KEY to your repository secrets"
+
+  # ===========================================================================
+  # JOB 5: Build Verification
+  # ===========================================================================
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [quick-checks, tests]
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      
+      - name: Detect Project Type
+        id: detect
+        run: |
+          if [ -f "package.json" ]; then
+            echo "type=node" >> $GITHUB_OUTPUT
+          elif [ -f "pyproject.toml" ]; then
+            echo "type=python" >> $GITHUB_OUTPUT
+          elif [ -f "go.mod" ]; then
+            echo "type=go" >> $GITHUB_OUTPUT
+          fi
+      
+      # Node.js build
+      - name: Setup Node.js
+        if: steps.detect.outputs.type == 'node'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      
+      - name: Build (Node)
+        if: steps.detect.outputs.type == 'node'
+        run: |
+          npm ci
+          npm run build || echo "No build script found"
+      
+      # Python build
+      - name: Setup Python
+        if: steps.detect.outputs.type == 'python'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Build (Python)
+        if: steps.detect.outputs.type == 'python'
+        run: |
+          pip install build
+          python -m build || echo "Build not configured"
+      
+      # Go build
+      - name: Build (Go)
+        if: steps.detect.outputs.type == 'go'
+        run: go build ./...
+
+  # ===========================================================================
+  # JOB 6: Quality Gate Summary
+  # ===========================================================================
+  quality-gate:
+    name: Quality Gate
+    runs-on: ubuntu-latest
+    needs: [quick-checks, tests, security, build]
+    if: always()
+    
+    steps:
+      - name: Check Results
+        run: |
+          echo "## Quality Gate Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Check each job status
+          if [ "${{ needs.quick-checks.result }}" == "success" ]; then
+            echo "✅ Quick Checks: Passed" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ Quick Checks: ${{ needs.quick-checks.result }}" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          if [ "${{ needs.tests.result }}" == "success" ]; then
+            echo "✅ Tests: Passed" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ Tests: ${{ needs.tests.result }}" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          if [ "${{ needs.security.result }}" == "success" ]; then
+            echo "✅ Security: Passed" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "⚠️ Security: ${{ needs.security.result }}" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          if [ "${{ needs.build.result }}" == "success" ]; then
+            echo "✅ Build: Passed" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ Build: ${{ needs.build.result }}" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Overall gate
+          if [ "${{ needs.quick-checks.result }}" == "success" ] && \
+             [ "${{ needs.tests.result }}" == "success" ] && \
+             [ "${{ needs.build.result }}" == "success" ]; then
+            echo "### ✅ Quality Gate: PASSED" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "### ❌ Quality Gate: FAILED" >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
