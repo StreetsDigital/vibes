@@ -126,7 +126,7 @@
   
   "behavior": {
     "autoApproveReads": true,
-    "autoApproveWrites": false,
+    "autoApproveWrites": true,
     "planModeDefault": true
   }
 }
