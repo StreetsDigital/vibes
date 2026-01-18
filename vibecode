@@ -50,6 +50,70 @@ show_banner() {
 }
 
 # =============================================================================
+# LIGHTSAIL / MOBILE COMMANDS
+# =============================================================================
+
+cmd_lightsail() {
+    SUBCMD="${1:-help}"
+
+    case "$SUBCMD" in
+        setup)
+            echo_step "Running Lightsail mobile setup..."
+            if [ -f "$SCRIPT_DIR/lightsail/setup.sh" ]; then
+                bash "$SCRIPT_DIR/lightsail/setup.sh"
+            else
+                echo_error "Lightsail setup script not found"
+                echo_info "Expected at: $SCRIPT_DIR/lightsail/setup.sh"
+                exit 1
+            fi
+            ;;
+        session|s)
+            # Quick session starter (wrapper for vibe command)
+            PROJECT="${2:-default}"
+            SESSION="vibe-$PROJECT"
+
+            if tmux has-session -t "$SESSION" 2>/dev/null; then
+                echo_info "Attaching to: $SESSION"
+                tmux attach -t "$SESSION"
+            else
+                echo_step "Creating session: $SESSION"
+                mkdir -p "$HOME/projects/$PROJECT"
+                tmux new-session -d -s "$SESSION" -n "claude" -c "$HOME/projects/$PROJECT"
+                tmux new-window -t "$SESSION" -n "shell" -c "$HOME/projects/$PROJECT"
+                tmux select-window -t "$SESSION:1"
+                tmux attach -t "$SESSION"
+            fi
+            ;;
+        list|ls)
+            echo "Active tmux sessions:"
+            echo ""
+            tmux list-sessions 2>/dev/null || echo_warning "No active sessions"
+            ;;
+        kill)
+            if [ -z "$2" ]; then
+                echo_error "Usage: vibecode lightsail kill <session>"
+                tmux list-sessions 2>/dev/null
+                exit 1
+            fi
+            tmux kill-session -t "$2" && echo_success "Killed: $2"
+            ;;
+        help|*)
+            echo "Lightsail / Mobile Commands"
+            echo ""
+            echo "  ${GREEN}vibecode lightsail setup${NC}        Install mobile environment"
+            echo "  ${GREEN}vibecode lightsail session${NC} [p]  Start/attach coding session"
+            echo "  ${GREEN}vibecode lightsail list${NC}         List active sessions"
+            echo "  ${GREEN}vibecode lightsail kill${NC} <name>  Kill a session"
+            echo ""
+            echo "After setup, you can also use:"
+            echo "  ${CYAN}vibe <project>${NC}    Quick session start"
+            echo "  ${CYAN}vibe-list${NC}         List sessions"
+            echo ""
+            ;;
+    esac
+}
+
+# =============================================================================
 # COMMANDS
 # =============================================================================
 
@@ -65,7 +129,13 @@ cmd_help() {
     echo "  ${GREEN}list${NC}                      List all projects"
     echo "  ${GREEN}status${NC} [project]          Show project status"
     echo "  ${GREEN}remove${NC} <project>          Delete project environment"
+    echo "  ${GREEN}lightsail${NC} <subcommand>    Mobile/Lightsail setup & sessions"
     echo "  ${GREEN}help${NC}                      Show this help"
+    echo ""
+    echo "Lightsail/Mobile:"
+    echo "  vibecode lightsail setup       Install mobile environment (tmux, etc)"
+    echo "  vibecode lightsail session [p] Start/attach to coding session"
+    echo "  vibecode lightsail list        List active tmux sessions"
     echo ""
     echo "Examples:"
     echo "  vibecode init"
@@ -76,6 +146,7 @@ cmd_help() {
     echo "  vibecode list"
     echo "  vibecode status my-api"
     echo "  vibecode remove my-api"
+    echo "  vibecode lightsail setup"
     echo ""
     echo "Profiles: python, javascript, go, rust, java, php, ruby, c, cpp"
     echo ""
@@ -452,6 +523,10 @@ case "$COMMAND" in
     remove|rm)
         shift
         cmd_remove "$@"
+        ;;
+    lightsail|ls-mobile|mobile)
+        shift
+        cmd_lightsail "$@"
         ;;
     help|--help|-h)
         cmd_help
