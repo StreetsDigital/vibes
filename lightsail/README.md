@@ -65,6 +65,19 @@ vibe my-project    # Creates/attaches to tmux session
 claude             # Start Claude Code
 ```
 
+### Window Layout
+
+Each session has 4 windows:
+
+| Window | Name | Purpose |
+|--------|------|---------|
+| 1 | `claude` | Main Claude Code session |
+| 2 | `shell` | Git, npm, terminal commands |
+| 3 | `logs` | Watch builds, tests, output |
+| 4 | `scratch` | Exploration & experiments |
+
+Switch with `Ctrl+a 1` through `Ctrl+a 4`.
+
 ### Detach When Done
 
 Press `Ctrl+a` then `d` to detach. Your session keeps running!

@@ -10,6 +10,7 @@ You are operating within a production-ready autonomous coding stack. Every featu
 | **Planning-with-Files** | Goal coherence | Before every major decision |
 | **Aleph** | Context management | When codebase > ~5k lines |
 | **Quality Gates** | Production readiness | Before marking ANY feature complete |
+| **Continuous Learning** | Knowledge retention | After debugging/problem-solving |
 
 ---
 
@@ -48,9 +49,14 @@ You are operating within a production-ready autonomous coding stack. Every featu
 │  7. MARK COMPLETE (only if verification passed)                 │
 │     └─► feature_mark_passing → auto-runs quality checks         │
 │     └─► aleph_refresh → Re-index codebase                       │
-│     └─► git commit -m "feat: ..."                               │
+│     └─► /commit → Commit with good message                      │
 ├─────────────────────────────────────────────────────────────────┤
-│  8. LOOP → Back to step 1                                       │
+│  8. LEARN (after significant debugging)                         │
+│     └─► /retrospective → Extract reusable knowledge             │
+│     └─► Save skills to ~/.claude/skills/learned/                │
+│     └─► Document insights in findings.md                        │
+├─────────────────────────────────────────────────────────────────┤
+│  9. LOOP → Back to step 1                                       │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -346,6 +352,65 @@ feature_verify(id)
 |---------|-------------|
 | `/verify` | Run quality verification |
 | `/commit` | Commit with quality checks |
+| `/retrospective` | Extract learnings as reusable skills |
+
+---
+
+## Continuous Learning
+
+After debugging sessions or solving non-obvious problems, extract knowledge for future use.
+
+### When to Extract
+
+- Non-obvious solutions requiring significant investigation
+- Project-specific patterns not in documentation
+- Tool integration knowledge beyond standard docs
+- Error resolution with non-apparent root causes
+
+### How to Extract
+
+```bash
+# At end of session with debugging work
+/retrospective
+```
+
+This analyzes the session and creates 1-3 skills.
+
+### Skill Format
+
+```markdown
+---
+name: fix-prisma-connections
+description: Fix "Too many connections" error in serverless
+author: claude
+version: 1.0.0
+---
+
+## Trigger
+Error: "Too many connections" with Prisma in serverless
+
+## Solution
+1. Use singleton pattern for PrismaClient
+2. Set connection_limit in DATABASE_URL
+
+## Verification
+Error stops occurring under concurrent load
+```
+
+### Storage Locations
+
+| Location | Purpose |
+|----------|---------|
+| `.claude/skills/learned/` | Project-specific knowledge |
+| `~/.claude/skills/learned/` | Cross-project knowledge |
+
+### Quality Gates for Skills
+
+Only extract if:
+- Would save time if encountered again
+- Not easily found in documentation
+- Has specific, recognizable trigger
+- Solution is verified to work
 
 ---
 
