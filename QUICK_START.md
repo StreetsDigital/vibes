@@ -2,7 +2,24 @@
 
 ## Step 1: Choose Your Environment
 
-### ☁️ Cloud (GitHub Codespaces) - RECOMMENDED
+### 📱 Mobile (Lightsail + Termius) - NEW
+**Code from your phone!**
+
+```bash
+# On Lightsail instance
+git clone https://github.com/StreetsDigital/vibes.git
+cd vibes && ./lightsail/setup.sh
+
+# Start coding
+vibe my-project
+claude
+```
+
+See: [lightsail/README.md](lightsail/README.md)
+
+---
+
+### ☁️ Cloud (GitHub Codespaces)
 **No Docker installation needed!**
 
 ```bash
@@ -72,6 +89,7 @@ Inside Claude Code:
 4. `quality_check` - Verify quality
 5. `feature_mark_passing` - Complete
 6. `/commit` - Commit changes
+7. `/retrospective` - Extract learnings (after debugging)
 
 ---
 
