@@ -100,6 +100,7 @@ vibecode list              # Show all projects
 vibecode status my-api     # Project details
 vibecode shell my-api      # Enter shell
 vibecode remove old-proj   # Delete project
+vibecode dashboard 8080    # Start web dashboard
 ```
 
 ---
@@ -127,6 +128,8 @@ vibecode code payment-service
 ✅ Separate MCP servers
 ✅ Independent databases
 ✅ Zero context bleed
+✅ Web dashboard for monitoring
+✅ Continuous learning across projects
 
 ---
 

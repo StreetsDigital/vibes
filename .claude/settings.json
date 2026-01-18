@@ -111,11 +111,11 @@
     
     "Stop": [
       {
-        "comment": "Log session activity",
+        "comment": "Log session end to dashboard",
         "hooks": [
           {
             "type": "command",
-            "command": "echo \"$(date '+%Y-%m-%d %H:%M:%S') - Session ended: $CONVERSATION_SUMMARY\" >> ~/.claude/activity.log 2>/dev/null || true"
+            "command": "mkdir -p ~/.claude/logs && echo '{\"timestamp\":\"'$(date -Iseconds)'\",\"type\":\"session_end\",\"message\":\"'\"$CONVERSATION_SUMMARY\"'\",\"project\":\"'${PWD##*/}'\"}' >> ~/.claude/logs/activity.jsonl 2>/dev/null || true"
           }
         ]
       },

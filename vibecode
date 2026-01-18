@@ -11,6 +11,8 @@
 #   vibecode list                    - List all projects
 #   vibecode remove <project>        - Remove project
 #   vibecode status [project]        - Show project status
+#   vibecode lightsail <subcommand>  - Mobile/Lightsail setup
+#   vibecode dashboard [port]        - Start web dashboard
 #   vibecode help                    - Show this help
 #
 
@@ -130,6 +132,7 @@ cmd_help() {
     echo "  ${GREEN}status${NC} [project]          Show project status"
     echo "  ${GREEN}remove${NC} <project>          Delete project environment"
     echo "  ${GREEN}lightsail${NC} <subcommand>    Mobile/Lightsail setup & sessions"
+    echo "  ${GREEN}dashboard${NC} [port]          Start web dashboard (default: 8080)"
     echo "  ${GREEN}help${NC}                      Show this help"
     echo ""
     echo "Lightsail/Mobile:"
@@ -147,6 +150,7 @@ cmd_help() {
     echo "  vibecode status my-api"
     echo "  vibecode remove my-api"
     echo "  vibecode lightsail setup"
+    echo "  vibecode dashboard 8080"
     echo ""
     echo "Profiles: python, javascript, go, rust, java, php, ruby, c, cpp"
     echo ""
@@ -512,6 +516,29 @@ cmd_remove() {
 }
 
 # =============================================================================
+# DASHBOARD COMMAND
+# =============================================================================
+
+cmd_dashboard() {
+    PORT="${1:-8080}"
+
+    echo_step "Starting Vibecode Dashboard on port $PORT..."
+    echo ""
+
+    if [ ! -f "$SCRIPT_DIR/dashboard/server.py" ]; then
+        echo_error "Dashboard server not found"
+        echo_info "Expected at: $SCRIPT_DIR/dashboard/server.py"
+        exit 1
+    fi
+
+    # Ensure log directory exists
+    mkdir -p "$HOME/.claude/logs"
+
+    # Start server
+    python3 "$SCRIPT_DIR/dashboard/server.py" "$PORT"
+}
+
+# =============================================================================
 # MAIN
 # =============================================================================
 
@@ -547,6 +574,10 @@ case "$COMMAND" in
     lightsail|ls-mobile|mobile)
         shift
         cmd_lightsail "$@"
+        ;;
+    dashboard|dash)
+        shift
+        cmd_dashboard "$@"
         ;;
     help|--help|-h)
         cmd_help

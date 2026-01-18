@@ -102,6 +102,7 @@ vibecode status [project]          # Show project info
 vibecode remove <project>          # Delete project
 vibecode lightsail setup           # Install mobile environment
 vibecode lightsail session [name]  # Start/attach tmux session
+vibecode dashboard [port]          # Start web dashboard (default: 8080)
 ```
 
 ### Slash Commands
@@ -141,8 +142,13 @@ vibes/
 ├── lightsail/
 │   ├── setup.sh                # Mobile setup script
 │   └── README.md               # Termius guide
+├── dashboard/
+│   ├── server.py               # Web dashboard server
+│   └── log-event.sh            # Event logging script
 └── scripts/
-    └── init-session.sh         # Planning files setup
+    ├── init-session.sh         # Planning files setup
+    ├── test-flow.sh            # Stack verification tests
+    └── test-learning.sh        # Learning flow tests
 ```
 
 ## Continuous Learning
@@ -190,6 +196,28 @@ quality_check()
 # Mark complete (auto-runs gates)
 feature_mark_passing(id)
 ```
+
+## Activity Dashboard
+
+Monitor all activity in real-time via web browser:
+
+```bash
+# Start dashboard
+vibecode dashboard 8080
+
+# Or directly
+python3 dashboard/server.py 8080
+```
+
+Access at `http://localhost:8080` (or your Lightsail IP).
+
+Features:
+- Real-time activity log with auto-refresh
+- Session/feature/commit statistics
+- Learned skills viewer
+- Dark theme, mobile-friendly
+
+Logs stored in `~/.claude/logs/activity.jsonl`.
 
 ## Project Isolation
 
