@@ -262,6 +262,9 @@ else
     # Add a monitoring window
     tmux new-window -t "$SESSION" -n "logs" -c "$HOME/projects/$PROJECT"
 
+    # Add an exploration/scratchpad window
+    tmux new-window -t "$SESSION" -n "scratch" -c "$HOME/projects/$PROJECT"
+
     # Go back to first window
     tmux select-window -t "$SESSION:1"
 
@@ -350,12 +353,17 @@ Quick Start:
   vibe-list          List active sessions
   vibe-kill <name>   Kill a session
 
+Windows:
+  1:claude   Main coding session
+  2:shell    Git, npm, terminal commands
+  3:logs     Watch builds, tests, output
+  4:scratch  Exploration & experiments
+
 tmux Shortcuts (prefix = Ctrl+a):
+  Ctrl+a 1-4         Switch windows
+  Ctrl+a d           Detach (session keeps running!)
   Ctrl+a |           Split horizontal
   Ctrl+a -           Split vertical
-  Ctrl+a d           Detach (session keeps running!)
-  Ctrl+a c           New window
-  Ctrl+a 1-4         Switch windows
   Ctrl+a Ctrl+a      Toggle zoom
 
 Inside a session:
