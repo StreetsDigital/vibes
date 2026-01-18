@@ -627,6 +627,22 @@ cmd_dashboard() {
     # Ensure log directory exists
     mkdir -p "$HOME/.claude/logs"
 
+    # Auto-open port on Lightsail if AWS CLI is configured
+    if command -v aws &>/dev/null && aws sts get-caller-identity &>/dev/null 2>&1; then
+        INSTANCE_NAME="${LIGHTSAIL_INSTANCE:-}"
+        if [ -z "$INSTANCE_NAME" ]; then
+            INSTANCE_NAME=$(aws lightsail get-instances --query 'instances[0].name' --output text 2>/dev/null)
+        fi
+        if [ -n "$INSTANCE_NAME" ] && [ "$INSTANCE_NAME" != "None" ]; then
+            echo_step "Opening port $PORT on Lightsail firewall..."
+            if aws lightsail open-instance-public-ports \
+                --instance-name "$INSTANCE_NAME" \
+                --port-info "fromPort=$PORT,toPort=$PORT,protocol=tcp" 2>/dev/null; then
+                echo_success "Port $PORT opened on $INSTANCE_NAME"
+            fi
+        fi
+    fi
+
     # Start server
     python3 "$SCRIPT_DIR/dashboard/server.py" "$PORT"
 }
