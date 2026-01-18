@@ -99,6 +99,95 @@ cmd_lightsail() {
             fi
             tmux kill-session -t "$2" && echo_success "Killed: $2"
             ;;
+        open-port|port)
+            PORT="${2:-}"
+            if [ -z "$PORT" ]; then
+                echo_error "Usage: vibecode lightsail open-port <port>"
+                exit 1
+            fi
+
+            # Check if AWS CLI is configured
+            if ! command -v aws &>/dev/null; then
+                echo_error "AWS CLI not installed"
+                echo_info "Run: vibecode lightsail aws-setup"
+                exit 1
+            fi
+
+            if ! aws sts get-caller-identity &>/dev/null; then
+                echo_error "AWS CLI not configured"
+                echo_info "Run: aws configure"
+                exit 1
+            fi
+
+            # Get instance name
+            INSTANCE_NAME="${LIGHTSAIL_INSTANCE:-}"
+            if [ -z "$INSTANCE_NAME" ]; then
+                echo_step "Detecting Lightsail instance..."
+                INSTANCE_NAME=$(aws lightsail get-instances --query 'instances[0].name' --output text 2>/dev/null)
+                if [ -z "$INSTANCE_NAME" ] || [ "$INSTANCE_NAME" = "None" ]; then
+                    echo_error "Could not detect instance. Set LIGHTSAIL_INSTANCE env var"
+                    exit 1
+                fi
+                echo_info "Found instance: $INSTANCE_NAME"
+            fi
+
+            echo_step "Opening port $PORT on $INSTANCE_NAME..."
+            if aws lightsail open-instance-public-ports \
+                --instance-name "$INSTANCE_NAME" \
+                --port-info "fromPort=$PORT,toPort=$PORT,protocol=tcp" 2>/dev/null; then
+                echo_success "Port $PORT opened"
+            else
+                echo_error "Failed to open port $PORT"
+                exit 1
+            fi
+            ;;
+        aws-setup)
+            echo_step "Setting up AWS CLI for Lightsail..."
+            echo ""
+
+            # Check if AWS CLI is installed
+            if ! command -v aws &>/dev/null; then
+                echo_step "Installing AWS CLI..."
+                curl -s "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "/tmp/awscliv2.zip"
+                unzip -q /tmp/awscliv2.zip -d /tmp
+                sudo /tmp/aws/install || /tmp/aws/install --bin-dir ~/.local/bin --install-dir ~/.local/aws-cli
+                rm -rf /tmp/aws /tmp/awscliv2.zip
+                echo_success "AWS CLI installed"
+            else
+                echo_success "AWS CLI already installed"
+            fi
+
+            echo ""
+            echo "Now configure your AWS credentials:"
+            echo ""
+            echo "  1. Go to AWS IAM Console"
+            echo "  2. Create/use a user with AmazonLightsailFullAccess policy"
+            echo "  3. Generate Access Key"
+            echo "  4. Run: aws configure"
+            echo ""
+            echo "Optional: Set default instance name:"
+            echo "  export LIGHTSAIL_INSTANCE=your-instance-name"
+            echo ""
+            ;;
+        ports)
+            # List open ports on instance
+            if ! aws sts get-caller-identity &>/dev/null; then
+                echo_error "AWS CLI not configured. Run: aws configure"
+                exit 1
+            fi
+
+            INSTANCE_NAME="${LIGHTSAIL_INSTANCE:-}"
+            if [ -z "$INSTANCE_NAME" ]; then
+                INSTANCE_NAME=$(aws lightsail get-instances --query 'instances[0].name' --output text 2>/dev/null)
+            fi
+
+            echo "Open ports on $INSTANCE_NAME:"
+            echo ""
+            aws lightsail get-instance-port-states \
+                --instance-name "$INSTANCE_NAME" \
+                --query 'portStates[*].[fromPort,toPort,protocol,state]' \
+                --output table 2>/dev/null || echo_error "Failed to list ports"
+            ;;
         help|*)
             echo "Lightsail / Mobile Commands"
             echo ""
@@ -106,6 +195,10 @@ cmd_lightsail() {
             echo "  ${GREEN}vibecode lightsail session${NC} [p]  Start/attach coding session"
             echo "  ${GREEN}vibecode lightsail list${NC}         List active sessions"
             echo "  ${GREEN}vibecode lightsail kill${NC} <name>  Kill a session"
+            echo ""
+            echo "  ${GREEN}vibecode lightsail aws-setup${NC}    Install/configure AWS CLI"
+            echo "  ${GREEN}vibecode lightsail open-port${NC} N  Open port N on firewall"
+            echo "  ${GREEN}vibecode lightsail ports${NC}        List open ports"
             echo ""
             echo "After setup, you can also use:"
             echo "  ${CYAN}vibe <project>${NC}    Quick session start"
