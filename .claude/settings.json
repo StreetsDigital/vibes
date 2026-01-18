@@ -32,16 +32,18 @@
       "Bash(mv:*)"
     ],
     "deny": [
-      "Read(.env:*)",
-      "Read(*.pem)",
-      "Read(*.key)",
+      "Read(.env)",
+      "Read(.env.*)",
+      "Read(**.pem)",
+      "Read(**.key)",
       "Bash(rm -rf /)",
       "Bash(rm -rf /*)",
       "Bash(sudo rm:*)",
       "Bash(chmod 777:*)",
-      "Edit(.env:*)",
-      "Edit(*.pem)",
-      "Edit(*.key)"
+      "Edit(.env)",
+      "Edit(.env.*)",
+      "Edit(**.pem)",
+      "Edit(**.key)"
     ]
   },
   
