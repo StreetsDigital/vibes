@@ -118,6 +118,15 @@
             "command": "echo \"$(date '+%Y-%m-%d %H:%M:%S') - Session ended: $CONVERSATION_SUMMARY\" >> ~/.claude/activity.log 2>/dev/null || true"
           }
         ]
+      },
+      {
+        "comment": "Prompt for knowledge extraction on significant sessions",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if [ -n \"$CONVERSATION_SUMMARY\" ] && echo \"$CONVERSATION_SUMMARY\" | grep -qiE '(debug|fix|error|issue|problem|solved|discovered)'; then echo 'LEARNING OPPORTUNITY: This session may contain extractable knowledge. Consider running /retrospective or saving insights to ~/.claude/skills/learned/'; fi; exit 0"
+          }
+        ]
       }
     ]
   },
