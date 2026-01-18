@@ -1,5 +1,5 @@
 {
-  "$schema": "https://code.claude.com/settings-schema.json",
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
   "comment": "Vibecoding Stack - Quality Gates Configuration",
   
   "permissions": {
@@ -41,8 +41,8 @@
       "Bash(rm -r /*)",
       "Bash(sudo:*)",
       "Bash(chmod 777:*)",
-      "Bash(curl:*|sh)",
-      "Bash(wget:*|sh)",
+      "Bash(curl * | sh)",
+      "Bash(wget * | sh)",
       "Bash(*DROP TABLE*)",
       "Bash(*DELETE FROM*)",
       "Bash(*TRUNCATE*)",
@@ -122,10 +122,7 @@
     ]
   },
   
-  "model": {
-    "default": "claude-sonnet-4-20250514",
-    "thinking": "claude-opus-4-20250514"
-  },
+  "model": "claude-sonnet-4-20250514",
   
   "behavior": {
     "autoApproveReads": true,

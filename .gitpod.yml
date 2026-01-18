@@ -1,0 +1,29 @@
+# Gitpod Configuration (Alternative to GitHub Codespaces)
+# Open with: https://gitpod.io/#https://github.com/YOUR-USERNAME/vibecoding-stack
+
+image: gitpod/workspace-full
+
+tasks:
+  - name: Setup Vibecoding Stack
+    init: |
+      bash .devcontainer/setup.sh
+    command: |
+      echo ""
+      echo "╔══════════════════════════════════════════════════════════════╗"
+      echo "║     VIBECODING STACK READY                                   ║"
+      echo "╚══════════════════════════════════════════════════════════════╝"
+      echo ""
+      echo "Quick Start:"
+      echo "  vibecode new my-project python"
+      echo "  vibecode code my-project"
+      echo ""
+
+vscode:
+  extensions:
+    - ms-python.python
+    - ms-python.vscode-pylance
+    - eamodio.gitlens
+
+ports:
+  - port: 3000-3010
+    onOpen: ignore

@@ -2,11 +2,43 @@
 
 Autonomous coding with quality gates: Autocoder + Planning Files + Aleph + Quality Gates
 
+**✨ Isolated per-project environments with zero bleed**
+
 ## Quick Start
 
+### 🚀 Option 1: GitHub Codespaces (Recommended - No Docker needed!)
+
+**FREE cloud environment with Docker pre-installed:**
+
+1. Push this repo to GitHub
+2. Click: **Code** → **Codespaces** → **Create codespace**
+3. Wait 2 minutes for auto-setup
+4. Start coding!
+
 ```bash
-chmod +x setup.sh && ./setup.sh
+vibecode new my-project python
+vibecode code my-project
 ```
+
+👉 **[Full Codespaces guide: CODESPACES.md](CODESPACES.md)**
+
+---
+
+### 💻 Option 2: Local Setup
+
+```bash
+# One command to manage everything
+./vibecode init
+
+# Create isolated project environments
+./vibecode new my-api python
+./vibecode new my-frontend javascript
+
+# Start coding (completely isolated)
+./vibecode code my-api
+```
+
+👉 **[Read the full guide: GETTING_STARTED.md](GETTING_STARTED.md)**
 
 ## Structure
 
@@ -29,11 +61,38 @@ mcp_server/
   "mcpServers": {
     "vibecoding": {
       "command": "python3",
-      "args": ["~/Desktop/vibecoding-stack/mcp_server/vibecoding_server.py", "."]
+      "args": ["/absolute/path/to/vibecoding-stack/mcp_server/vibecoding_server.py", "."]
     }
   }
 }
 ```
+
+**Note:** Replace `/absolute/path/to/vibecoding-stack/` with the actual path to this directory.
+
+## All Commands (One Script)
+
+```bash
+vibecode init                    # Install everything
+vibecode new <project> [profile] # Create isolated environment
+vibecode shell <project>         # Enter project shell
+vibecode code <project>          # Start Claude Code
+vibecode list                    # List all projects
+vibecode status [project]        # Show project info
+vibecode remove <project>        # Delete project
+```
+
+## Why Isolation?
+
+**Without isolation (❌ bleed):**
+- Settings from Project A affect Project B
+- MCP server state shared across all projects
+- Context contamination between sessions
+
+**With isolation (✅ clean):**
+- Each project has its own `.claude/settings.json`
+- Separate MCP server instances
+- Independent autocoder databases
+- Zero context bleed
 
 ## The Loop
 

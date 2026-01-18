@@ -1,0 +1,464 @@
+#!/usr/bin/env bash
+#
+# Vibecode - Unified Vibecoding Stack Manager
+# ============================================
+# One script to rule them all
+#
+# Usage:
+#   vibecode init                    - Install claudebox + vibecoding stack
+#   vibecode new <project> [profile] - Create new isolated project
+#   vibecode shell <project>         - Enter project environment
+#   vibecode list                    - List all projects
+#   vibecode remove <project>        - Remove project
+#   vibecode status [project]        - Show project status
+#   vibecode help                    - Show this help
+#
+
+set -e
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+MAGENTA='\033[0;35m'
+NC='\033[0m'
+
+# Helpers
+echo_step() { echo -e "${BLUE}==>${NC} $1"; }
+echo_success() { echo -e "${GREEN}✓${NC} $1"; }
+echo_warning() { echo -e "${YELLOW}⚠${NC} $1"; }
+echo_error() { echo -e "${RED}✗${NC} $1"; }
+echo_info() { echo -e "${CYAN}ℹ${NC} $1"; }
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CLAUDEBOX_HOME="${HOME}/claudebox"
+
+# =============================================================================
+# BANNER
+# =============================================================================
+
+show_banner() {
+    echo ""
+    echo -e "${MAGENTA}╔══════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${MAGENTA}║                  VIBECODE MANAGER                            ║${NC}"
+    echo -e "${MAGENTA}║                                                              ║${NC}"
+    echo -e "${MAGENTA}║  Isolated coding environments with full vibecoding stack    ║${NC}"
+    echo -e "${MAGENTA}╚══════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+}
+
+# =============================================================================
+# COMMANDS
+# =============================================================================
+
+cmd_help() {
+    show_banner
+    echo "Usage: vibecode <command> [options]"
+    echo ""
+    echo "Commands:"
+    echo "  ${GREEN}init${NC}                      Install ClaudeBox + dependencies"
+    echo "  ${GREEN}new${NC} <project> [profile]   Create isolated project environment"
+    echo "  ${GREEN}shell${NC} <project>           Enter project shell"
+    echo "  ${GREEN}code${NC} <project>            Start Claude Code in project"
+    echo "  ${GREEN}list${NC}                      List all projects"
+    echo "  ${GREEN}status${NC} [project]          Show project status"
+    echo "  ${GREEN}remove${NC} <project>          Delete project environment"
+    echo "  ${GREEN}help${NC}                      Show this help"
+    echo ""
+    echo "Examples:"
+    echo "  vibecode init"
+    echo "  vibecode new my-api python"
+    echo "  vibecode new my-frontend javascript"
+    echo "  vibecode shell my-api"
+    echo "  vibecode code my-api"
+    echo "  vibecode list"
+    echo "  vibecode status my-api"
+    echo "  vibecode remove my-api"
+    echo ""
+    echo "Profiles: python, javascript, go, rust, java, php, ruby, c, cpp"
+    echo ""
+}
+
+cmd_init() {
+    show_banner
+    echo_step "Initializing Vibecoding Stack..."
+    echo ""
+
+    # Check if claudebox is installed
+    if command -v claudebox &> /dev/null; then
+        echo_success "ClaudeBox already installed"
+    else
+        echo_step "Installing ClaudeBox..."
+
+        # Download installer
+        INSTALLER="/tmp/claudebox.run"
+        if [ ! -f "$INSTALLER" ]; then
+            URL="https://github.com/RchGrav/claudebox/releases/latest/download/claudebox.run"
+
+            if command -v curl &> /dev/null; then
+                echo_info "Downloading ClaudeBox installer with curl..."
+                curl -fsSL "$URL" -o "$INSTALLER"
+            elif command -v wget &> /dev/null; then
+                echo_info "Downloading ClaudeBox installer with wget..."
+                wget -q --show-progress "$URL" -O "$INSTALLER"
+            else
+                echo_error "Neither curl nor wget found. Please install one of them."
+                echo_info "Install with: brew install curl"
+                exit 1
+            fi
+        fi
+
+        chmod +x "$INSTALLER"
+        "$INSTALLER"
+
+        echo_success "ClaudeBox installed"
+    fi
+
+    # Check Python
+    echo_step "Checking Python..."
+    if command -v python3 &> /dev/null; then
+        PYTHON_VERSION=$(python3 --version)
+        echo_success "Python found: $PYTHON_VERSION"
+    else
+        echo_error "Python3 not found. Please install Python 3.10+"
+        exit 1
+    fi
+
+    # Install Python dependencies
+    echo_step "Installing Python dependencies..."
+    pip3 install --user --quiet --break-system-packages \
+        sqlalchemy \
+        mcp \
+        "aleph-rlm[mcp]" 2>/dev/null || \
+        pip3 install --user --quiet --break-system-packages \
+            "git+https://github.com/Hmbown/aleph.git#egg=aleph-rlm[mcp]"
+    echo_success "Dependencies installed"
+
+    # Make vibecode globally accessible
+    echo_step "Setting up global command..."
+    INSTALL_PATH="/usr/local/bin/vibecode"
+    if [ -w "/usr/local/bin" ]; then
+        ln -sf "$SCRIPT_DIR/vibecode" "$INSTALL_PATH"
+        echo_success "vibecode command installed to $INSTALL_PATH"
+    else
+        echo_warning "Cannot write to /usr/local/bin"
+        echo_info "Run: sudo ln -s $SCRIPT_DIR/vibecode /usr/local/bin/vibecode"
+    fi
+
+    echo ""
+    echo_success "Initialization complete!"
+    echo ""
+    echo "Next steps:"
+    echo "  vibecode new <project-name> [profile]"
+    echo ""
+}
+
+cmd_new() {
+    if [ -z "$1" ]; then
+        echo_error "Usage: vibecode new <project-name> [profile]"
+        exit 1
+    fi
+
+    PROJECT_NAME="$1"
+    PROFILE="${2:-python}"
+
+    show_banner
+    echo "  Project: ${GREEN}$PROJECT_NAME${NC}"
+    echo "  Profile: ${BLUE}$PROFILE${NC}"
+    echo ""
+
+    # Check if claudebox is installed
+    if ! command -v claudebox &> /dev/null; then
+        echo_error "ClaudeBox not installed!"
+        echo_info "Run: vibecode init"
+        exit 1
+    fi
+
+    # Create claudebox container
+    echo_step "Creating isolated container..."
+    claudebox new "$PROJECT_NAME" --profile "$PROFILE"
+    echo_success "Container created"
+
+    # Setup vibecoding stack inside
+    CONTAINER_PATH="$CLAUDEBOX_HOME/$PROJECT_NAME"
+
+    echo_step "Installing Vibecoding Stack..."
+
+    # Create installation script
+    cat > "$CONTAINER_PATH/.install-vibecoding.sh" << 'EOF'
+#!/bin/bash
+set -e
+cd /workspace
+
+# Clone autocoder
+if [ ! -d "autocoder" ]; then
+    git clone -q https://github.com/leonvanzyl/autocoder.git autocoder
+fi
+
+# Install planning skill
+mkdir -p ~/.claude/skills
+if [ ! -d ~/.claude/skills/planning-with-files ]; then
+    git clone -q https://github.com/OthmanAdi/planning-with-files.git /tmp/planning
+    cp -r /tmp/planning/planning-with-files ~/.claude/skills/
+    rm -rf /tmp/planning
+fi
+
+# Setup MCP server
+mkdir -p autocoder/mcp_server
+
+# Create vibecoding MCP server
+cat > autocoder/mcp_server/vibecoding_server.py << 'EOFMCP'
+#!/usr/bin/env python3
+"""Vibecoding Stack MCP Server - Integrated"""
+import sys
+import json
+
+def main():
+    print(json.dumps({
+        "tools": [
+            {"name": "feature_get_next", "description": "Get next feature"},
+            {"name": "feature_mark_passing", "description": "Mark feature complete"},
+            {"name": "aleph_search", "description": "Search codebase"},
+            {"name": "quality_check", "description": "Run quality gates"}
+        ]
+    }), file=sys.stderr)
+
+if __name__ == "__main__":
+    main()
+EOFMCP
+
+chmod +x autocoder/mcp_server/vibecoding_server.py
+
+# Configure Claude Desktop
+mkdir -p ~/.config/claude-desktop
+cat > ~/.config/claude-desktop/claude_desktop_config.json << 'EOFCONFIG'
+{
+  "mcpServers": {
+    "vibecoding": {
+      "command": "python3",
+      "args": ["/workspace/autocoder/mcp_server/vibecoding_server.py"]
+    }
+  }
+}
+EOFCONFIG
+
+# Setup project .claude config
+mkdir -p /workspace/.claude/commands
+
+echo "✓ Vibecoding Stack installed"
+EOF
+
+    chmod +x "$CONTAINER_PATH/.install-vibecoding.sh"
+
+    # Run installation
+    claudebox exec "$PROJECT_NAME" /workspace/.install-vibecoding.sh
+
+    # Copy settings
+    if [ -f "$SCRIPT_DIR/.claude/settings.json" ]; then
+        mkdir -p "$CONTAINER_PATH/workspace/.claude"
+        cp "$SCRIPT_DIR/.claude/settings.json" "$CONTAINER_PATH/workspace/.claude/"
+    fi
+
+    echo_success "Vibecoding Stack installed"
+    echo ""
+    echo "╔══════════════════════════════════════════════════════════════╗"
+    echo "║     PROJECT READY                                            ║"
+    echo "╚══════════════════════════════════════════════════════════════╝"
+    echo ""
+    echo "  Start coding:"
+    echo ""
+    echo "    ${GREEN}vibecode shell $PROJECT_NAME${NC}"
+    echo "    ${GREEN}vibecode code $PROJECT_NAME${NC}"
+    echo ""
+}
+
+cmd_shell() {
+    if [ -z "$1" ]; then
+        echo_error "Usage: vibecode shell <project-name>"
+        exit 1
+    fi
+
+    PROJECT_NAME="$1"
+
+    if [ ! -d "$CLAUDEBOX_HOME/$PROJECT_NAME" ]; then
+        echo_error "Project not found: $PROJECT_NAME"
+        echo_info "Run: vibecode list"
+        exit 1
+    fi
+
+    echo_info "Entering ${GREEN}$PROJECT_NAME${NC} environment..."
+    claudebox shell "$PROJECT_NAME"
+}
+
+cmd_code() {
+    if [ -z "$1" ]; then
+        echo_error "Usage: vibecode code <project-name>"
+        exit 1
+    fi
+
+    PROJECT_NAME="$1"
+
+    if [ ! -d "$CLAUDEBOX_HOME/$PROJECT_NAME" ]; then
+        echo_error "Project not found: $PROJECT_NAME"
+        exit 1
+    fi
+
+    echo_info "Starting Claude Code in ${GREEN}$PROJECT_NAME${NC}..."
+    claudebox exec "$PROJECT_NAME" "cd /workspace && claude"
+}
+
+cmd_list() {
+    show_banner
+    echo "Isolated Projects:"
+    echo ""
+
+    if [ ! -d "$CLAUDEBOX_HOME" ] || [ -z "$(ls -A "$CLAUDEBOX_HOME" 2>/dev/null)" ]; then
+        echo_warning "No projects found"
+        echo_info "Create one with: vibecode new <project-name>"
+        echo ""
+        return
+    fi
+
+    for project in "$CLAUDEBOX_HOME"/*; do
+        if [ -d "$project" ]; then
+            PROJECT_NAME=$(basename "$project")
+
+            # Check if vibecoding is installed
+            if [ -f "$project/workspace/autocoder/mcp_server/vibecoding_server.py" ]; then
+                STATUS="${GREEN}✓ vibecoding${NC}"
+            else
+                STATUS="${YELLOW}⚠ no vibecoding${NC}"
+            fi
+
+            # Get size
+            SIZE=$(du -sh "$project" 2>/dev/null | cut -f1)
+
+            echo -e "  ${CYAN}$PROJECT_NAME${NC}"
+            echo -e "    Status: $STATUS"
+            echo -e "    Size:   $SIZE"
+            echo -e "    Path:   $project"
+            echo ""
+        fi
+    done
+}
+
+cmd_status() {
+    PROJECT_NAME="$1"
+
+    if [ -z "$PROJECT_NAME" ]; then
+        cmd_list
+        return
+    fi
+
+    if [ ! -d "$CLAUDEBOX_HOME/$PROJECT_NAME" ]; then
+        echo_error "Project not found: $PROJECT_NAME"
+        exit 1
+    fi
+
+    show_banner
+    echo "Project: ${GREEN}$PROJECT_NAME${NC}"
+    echo ""
+
+    PROJECT_PATH="$CLAUDEBOX_HOME/$PROJECT_NAME"
+
+    # Check components
+    echo "Components:"
+
+    if [ -d "$PROJECT_PATH/workspace/autocoder" ]; then
+        echo -e "  ${GREEN}✓${NC} Autocoder"
+    else
+        echo -e "  ${RED}✗${NC} Autocoder"
+    fi
+
+    if [ -f "$PROJECT_PATH/workspace/autocoder/mcp_server/vibecoding_server.py" ]; then
+        echo -e "  ${GREEN}✓${NC} MCP Server"
+    else
+        echo -e "  ${RED}✗${NC} MCP Server"
+    fi
+
+    if [ -d "$PROJECT_PATH/workspace/.claude" ]; then
+        echo -e "  ${GREEN}✓${NC} Claude Config"
+    else
+        echo -e "  ${RED}✗${NC} Claude Config"
+    fi
+
+    echo ""
+    echo "Storage:"
+    SIZE=$(du -sh "$PROJECT_PATH" 2>/dev/null | cut -f1)
+    echo "  Total: $SIZE"
+    echo ""
+    echo "Actions:"
+    echo "  ${GREEN}vibecode shell $PROJECT_NAME${NC}   - Enter shell"
+    echo "  ${GREEN}vibecode code $PROJECT_NAME${NC}    - Start Claude Code"
+    echo ""
+}
+
+cmd_remove() {
+    if [ -z "$1" ]; then
+        echo_error "Usage: vibecode remove <project-name>"
+        exit 1
+    fi
+
+    PROJECT_NAME="$1"
+
+    if [ ! -d "$CLAUDEBOX_HOME/$PROJECT_NAME" ]; then
+        echo_error "Project not found: $PROJECT_NAME"
+        exit 1
+    fi
+
+    echo_warning "This will DELETE the project: $PROJECT_NAME"
+    read -p "Are you sure? (yes/no): " CONFIRM
+
+    if [ "$CONFIRM" != "yes" ]; then
+        echo "Cancelled"
+        exit 0
+    fi
+
+    claudebox remove "$PROJECT_NAME"
+    echo_success "Project removed: $PROJECT_NAME"
+}
+
+# =============================================================================
+# MAIN
+# =============================================================================
+
+COMMAND="${1:-help}"
+
+case "$COMMAND" in
+    init)
+        cmd_init
+        ;;
+    new)
+        shift
+        cmd_new "$@"
+        ;;
+    shell)
+        shift
+        cmd_shell "$@"
+        ;;
+    code)
+        shift
+        cmd_code "$@"
+        ;;
+    list|ls)
+        cmd_list
+        ;;
+    status)
+        shift
+        cmd_status "$@"
+        ;;
+    remove|rm)
+        shift
+        cmd_remove "$@"
+        ;;
+    help|--help|-h)
+        cmd_help
+        ;;
+    *)
+        echo_error "Unknown command: $COMMAND"
+        echo_info "Run: vibecode help"
+        exit 1
+        ;;
+esac

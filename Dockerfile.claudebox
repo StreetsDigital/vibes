@@ -1,0 +1,65 @@
+# ClaudeBox + Vibecoding Stack Profile
+# =====================================
+# Use this with claudebox to create isolated vibecoding environments
+
+FROM debian:bookworm-slim
+
+# Install base dependencies
+RUN apt-get update && apt-get install -y \
+    python3 \
+    python3-pip \
+    python3-venv \
+    git \
+    curl \
+    wget \
+    jq \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create workspace
+WORKDIR /workspace
+
+# Install Vibecoding Stack dependencies
+RUN pip3 install --break-system-packages \
+    sqlalchemy \
+    mcp \
+    "aleph-rlm[mcp]" || \
+    pip3 install --break-system-packages "git+https://github.com/Hmbown/aleph.git#egg=aleph-rlm[mcp]"
+
+# Copy vibecoding-stack
+COPY . /opt/vibecoding-stack/
+
+# Setup directories
+RUN mkdir -p /root/.claude/skills \
+    && mkdir -p /root/autocoder
+
+# Install autocoder
+RUN git clone https://github.com/leonvanzyl/autocoder.git /root/autocoder
+
+# Install planning-with-files skill
+RUN git clone https://github.com/OthmanAdi/planning-with-files.git /tmp/planning-with-files \
+    && cp -r /tmp/planning-with-files/planning-with-files /root/.claude/skills/ \
+    && rm -rf /tmp/planning-with-files
+
+# Integrate vibecoding components into autocoder
+RUN mkdir -p /root/autocoder/mcp_server \
+    && cp /opt/vibecoding-stack/mcp_server/*.py /root/autocoder/mcp_server/ \
+    && cp /opt/vibecoding-stack/CLAUDE.md /root/autocoder/
+
+# Configure Claude Desktop for this container
+RUN mkdir -p /root/.config/claude-desktop && \
+    echo '{"mcpServers": {"vibecoding": {"command": "python3", "args": ["/root/autocoder/mcp_server/vibecoding_server.py", "."]}}}' \
+    > /root/.config/claude-desktop/claude_desktop_config.json
+
+# Copy .claude settings (isolated per container)
+RUN mkdir -p /workspace/.claude/commands \
+    && cp /opt/vibecoding-stack/.claude/settings.json /workspace/.claude/ \
+    && cp /opt/vibecoding-stack/.claude/commands/* /workspace/.claude/commands/
+
+# Install quality gates
+COPY install-quality-gates.sh /opt/
+RUN chmod +x /opt/install-quality-gates.sh
+
+WORKDIR /workspace
+
+CMD ["/bin/bash"]
