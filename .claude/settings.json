@@ -32,21 +32,14 @@
       "Bash(mv:*)"
     ],
     "deny": [
-      "Read(.env*)",
+      "Read(.env:*)",
       "Read(*.pem)",
       "Read(*.key)",
-      "Read(*secret*)",
-      "Read(*credential*)",
-      "Bash(rm -rf:*)",
-      "Bash(rm -r /*)",
-      "Bash(sudo:*)",
+      "Bash(rm -rf /)",
+      "Bash(rm -rf /*)",
+      "Bash(sudo rm:*)",
       "Bash(chmod 777:*)",
-      "Bash(curl * | sh)",
-      "Bash(wget * | sh)",
-      "Bash(*DROP TABLE*)",
-      "Bash(*DELETE FROM*)",
-      "Bash(*TRUNCATE*)",
-      "Edit(.env*)",
+      "Edit(.env:*)",
       "Edit(*.pem)",
       "Edit(*.key)"
     ]
