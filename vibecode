@@ -247,10 +247,21 @@ cmd_new() {
         exit 1
     fi
 
+    # Ensure global skills directory exists on host
+    GLOBAL_SKILLS_DIR="$HOME/.claude/skills/learned"
+    mkdir -p "$GLOBAL_SKILLS_DIR"
+
     # Create claudebox container
     echo_step "Creating isolated container..."
     claudebox new "$PROJECT_NAME" --profile "$PROFILE"
     echo_success "Container created"
+
+    # Mount global skills into container
+    CONTAINER_PATH="$CLAUDEBOX_HOME/$PROJECT_NAME"
+    if [ -d "$CONTAINER_PATH" ]; then
+        ln -sf "$GLOBAL_SKILLS_DIR" "$CONTAINER_PATH/host-skills" 2>/dev/null || true
+        echo_success "Global skills mounted"
+    fi
 
     # Setup vibecoding stack inside
     CONTAINER_PATH="$CLAUDEBOX_HOME/$PROJECT_NAME"
@@ -274,6 +285,15 @@ if [ ! -d ~/.claude/skills/planning-with-files ]; then
     git clone -q https://github.com/OthmanAdi/planning-with-files.git /tmp/planning
     cp -r /tmp/planning/planning-with-files ~/.claude/skills/
     rm -rf /tmp/planning
+fi
+
+# Setup global skills symlink (shared across all containers)
+mkdir -p ~/.claude/skills/learned
+if [ -d /host-skills ] && [ ! -L ~/.claude/skills/learned ]; then
+    # Remove local learned dir and symlink to host
+    rm -rf ~/.claude/skills/learned
+    ln -s /host-skills ~/.claude/skills/learned
+    echo "✓ Global skills linked"
 fi
 
 # Setup MCP server
