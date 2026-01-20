@@ -188,15 +188,55 @@ du -sh /home/vibes/*
 3. **Enable 2FA** on your hosting provider
 4. **Regular backups** of `/home/vibes/projects`
 
-## Scaling
+## Scaling with Fly.io Burst
 
-For more agents, upgrade to a larger server or use the burst pattern:
+For parallel agents without paying for idle capacity:
+
+```
+Base Server ($15/mo)          Fly.io (pay-per-use)
+├── Mayor (orchestrator)      ├── Polecat-1 → Feature A
+├── Kanban UI                 ├── Polecat-2 → Feature B
+├── Dashboard                 ├── Polecat-3 → Feature C
+└── Beads (git state)         └── (auto-shutdown when done)
+```
+
+### Setup Fly.io Burst
 
 ```bash
-# Base server: always-on Mayor + Kanban
-# Fly.io: spin up Polecats on demand
+# 1. Install Fly CLI
+curl -L https://fly.io/install.sh | sh
 
-# In your vibes config, set:
-# POLECAT_PROVIDER=flyio
-# FLY_API_TOKEN=...
+# 2. Login
+fly auth login
+
+# 3. Create app for Polecats
+fly apps create vibes-polecats
+
+# 4. Get API token
+fly tokens create
+
+# 5. Add to .env
+FLY_API_TOKEN=your-token-here
+FLY_APP_NAME=vibes-polecats
+FLY_REGION=iad
 ```
+
+### Cost Estimate
+
+| Scenario | Base Server | Fly.io Burst | Total |
+|----------|-------------|--------------|-------|
+| Solo dev, occasional parallel | $15/mo | ~$5/mo | $20/mo |
+| Heavy parallel (8hrs/day) | $15/mo | ~$20/mo | $35/mo |
+| Team of 3 | $55/mo (AX42) | ~$30/mo | $85/mo |
+
+Fly.io charges ~$0.02/hr per Polecat. A feature taking 15 mins = $0.005.
+
+### How It Works
+
+1. Mayor detects multiple pending Beads
+2. Creates Convoy grouping related work
+3. Spawns Polecat on Fly.io for each Convoy
+4. Polecat clones repo, runs Claude, pushes changes
+5. Polecat reports completion via webhook
+6. Mayor pulls changes, updates Beads
+7. Polecat auto-terminates (you stop paying)
