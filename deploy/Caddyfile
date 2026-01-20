@@ -15,10 +15,10 @@
 	# acme_ca https://acme-staging-v02.api.letsencrypt.org/directory
 }
 
-# Main domain - Kanban UI
+# Main domain - Vibes Frontend (Kanban + Claude Chat)
 {$DOMAIN:localhost} {
-	# Kanban board
-	reverse_proxy kanban:3000
+	# Frontend app
+	reverse_proxy frontend:3000
 
 	# Security headers
 	header {

@@ -33,28 +33,47 @@ services:
     networks:
       - vibes-network
     depends_on:
-      - kanban
+      - frontend
       - dashboard
 
   # ===========================================
-  # Vibe-Kanban (Visual Task Management)
+  # Vibes Frontend (Kanban + Claude Chat)
   # ===========================================
-  kanban:
-    image: node:20-alpine
-    container_name: vibes-kanban
+  frontend:
+    build:
+      context: ..
+      dockerfile: frontend/Dockerfile
+    container_name: vibes-frontend
     restart: unless-stopped
-    working_dir: /app
-    command: sh -c "npm install -g vibe-kanban && vibe-kanban serve --host 0.0.0.0 --port 3000"
     environment:
-      - NODE_ENV=production
       - VIBES_USE_BEADS=true
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
     volumes:
       - projects:/projects
-      - kanban_data:/app/.vibe-kanban
     networks:
       - vibes-network
     expose:
       - "3000"
+
+  # ===========================================
+  # Vibe-Kanban (Alternative - if you prefer)
+  # ===========================================
+  # kanban:
+  #   image: node:20-alpine
+  #   container_name: vibes-kanban
+  #   restart: unless-stopped
+  #   working_dir: /app
+  #   command: sh -c "npm install -g vibe-kanban && vibe-kanban serve --host 0.0.0.0 --port 3000"
+  #   environment:
+  #     - NODE_ENV=production
+  #     - VIBES_USE_BEADS=true
+  #   volumes:
+  #     - projects:/projects
+  #     - kanban_data:/app/.vibe-kanban
+  #   networks:
+  #     - vibes-network
+  #   expose:
+  #     - "3000"
 
   # ===========================================
   # Vibes Dashboard (Activity Monitoring)
