@@ -682,6 +682,80 @@ def toggle_mcp_server(name):
     return jsonify({"error": "Server not found"}), 404
 
 
+@app.route('/api/claude/mcp/<name>', methods=['GET'])
+@requires_auth
+def get_mcp_server(name):
+    """Get a single MCP server's details."""
+    data = request.args
+    scope = data.get("scope", "project")
+
+    settings = load_claude_settings(scope)
+    if "mcpServers" in settings and name in settings["mcpServers"]:
+        config = settings["mcpServers"][name]
+        return jsonify({
+            "name": name,
+            "scope": scope,
+            "command": config.get("command", ""),
+            "args": config.get("args", []),
+            "env": config.get("env", {}),
+            "enabled": not config.get("disabled", False)
+        })
+
+    return jsonify({"error": "Server not found"}), 404
+
+
+@app.route('/api/claude/mcp/<name>', methods=['PUT'])
+@requires_auth
+def update_mcp_server(name):
+    """Update an MCP server."""
+    data = request.json
+    scope = data.get("scope", "project")
+    new_name = data.get("name", name)
+    command = data.get("command")
+    args = data.get("args", [])
+    env = data.get("env", {})
+
+    settings = load_claude_settings(scope)
+    if "mcpServers" not in settings or name not in settings["mcpServers"]:
+        return jsonify({"error": "Server not found"}), 404
+
+    # Get existing config
+    config = settings["mcpServers"][name]
+
+    # If renaming, delete old entry
+    if new_name != name:
+        del settings["mcpServers"][name]
+
+    # Update config
+    settings["mcpServers"][new_name] = {
+        "command": command or config.get("command", ""),
+        "args": args if args else config.get("args", []),
+    }
+    if env:
+        settings["mcpServers"][new_name]["env"] = env
+    if config.get("disabled"):
+        settings["mcpServers"][new_name]["disabled"] = True
+
+    save_claude_settings(settings, scope)
+    return jsonify({"success": True, "name": new_name})
+
+
+@app.route('/api/claude/mcp/<name>', methods=['DELETE'])
+@requires_auth
+def delete_mcp_server(name):
+    """Delete an MCP server."""
+    data = request.json or {}
+    scope = data.get("scope", "project")
+
+    settings = load_claude_settings(scope)
+    if "mcpServers" in settings and name in settings["mcpServers"]:
+        del settings["mcpServers"][name]
+        save_claude_settings(settings, scope)
+        return jsonify({"success": True})
+
+    return jsonify({"error": "Server not found"}), 404
+
+
 @app.route('/api/claude/skills')
 @requires_auth
 def get_skills():
@@ -774,10 +848,284 @@ def get_skill_content(file_path):
     try:
         path = Path("/" + file_path)
         if path.exists() and path.suffix == ".md":
-            return jsonify({"content": path.read_text()})
+            return jsonify({"content": path.read_text(), "path": str(path)})
         return jsonify({"error": "Skill not found"}), 404
     except:
         return jsonify({"error": "Invalid path"}), 400
+
+
+@app.route('/api/claude/skills/<path:file_path>', methods=['PUT'])
+@requires_auth
+def update_skill(file_path):
+    """Update a skill file."""
+    try:
+        path = Path("/" + file_path)
+        if not path.exists() or path.suffix != ".md":
+            return jsonify({"error": "Skill not found"}), 404
+
+        data = request.json
+        content = data.get("content")
+        if content is None:
+            return jsonify({"error": "Content required"}), 400
+
+        path.write_text(content)
+        return jsonify({"success": True, "path": str(path)})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+
+@app.route('/api/claude/skills/<path:file_path>', methods=['DELETE'])
+@requires_auth
+def delete_skill(file_path):
+    """Delete a skill file."""
+    try:
+        path = Path("/" + file_path)
+        if not path.exists() or path.suffix != ".md":
+            return jsonify({"error": "Skill not found"}), 404
+
+        path.unlink()
+        return jsonify({"success": True})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+
+# Built-in tools list with detailed info
+CLAUDE_TOOLS = [
+    {
+        "name": "Read",
+        "description": "Read files from filesystem",
+        "details": "Reads file contents by path. Supports reading images, PDFs, and Jupyter notebooks. Can specify line offset and limit for large files."
+    },
+    {
+        "name": "Write",
+        "description": "Write/create files",
+        "details": "Creates or overwrites files. Requires reading the file first if it exists. Use for creating new files or complete rewrites."
+    },
+    {
+        "name": "Edit",
+        "description": "Make targeted edits to files",
+        "details": "Performs exact string replacements in files. Use old_string to match existing content and new_string for replacement. Supports replace_all for multiple occurrences."
+    },
+    {
+        "name": "Bash",
+        "description": "Execute shell commands",
+        "details": "Runs bash commands with optional timeout. Captures output. Use for git, npm, docker, and other CLI operations. Avoid for file operations (use Read/Write/Edit instead)."
+    },
+    {
+        "name": "Glob",
+        "description": "Find files by pattern",
+        "details": "Fast file pattern matching. Supports patterns like '**/*.js' or 'src/**/*.ts'. Returns file paths sorted by modification time."
+    },
+    {
+        "name": "Grep",
+        "description": "Search file contents",
+        "details": "Powerful regex search using ripgrep. Supports glob patterns, file type filters, context lines, and multiple output modes."
+    },
+    {
+        "name": "Task",
+        "description": "Spawn sub-agents",
+        "details": "Launches specialized agents for complex tasks. Available types: Bash, Explore, Plan, general-purpose. Agents run autonomously and return results."
+    },
+    {
+        "name": "WebFetch",
+        "description": "Fetch web content",
+        "details": "Fetches URL content and processes with AI. Converts HTML to markdown. Use for retrieving and analyzing web pages."
+    },
+    {
+        "name": "WebSearch",
+        "description": "Search the web",
+        "details": "Performs web searches for up-to-date information. Returns search results with links. Use for current events and recent data beyond training cutoff."
+    },
+    {
+        "name": "NotebookEdit",
+        "description": "Edit Jupyter notebooks",
+        "details": "Edit cells in .ipynb files. Supports replace, insert, and delete modes. Can set cell type (code or markdown)."
+    },
+    {
+        "name": "TodoWrite",
+        "description": "Track task progress",
+        "details": "Creates and manages structured task lists. Track progress with pending/in_progress/completed states. Use for complex multi-step tasks."
+    },
+]
+
+
+@app.route('/api/claude/tools')
+@requires_auth
+def get_tools():
+    """Get Claude's built-in tools and their status."""
+    global_settings = load_claude_settings("global")
+    project_settings = load_claude_settings("project")
+
+    # Merge denied tools from both scopes
+    denied_global = set(global_settings.get("deniedTools", []))
+    denied_project = set(project_settings.get("deniedTools", []))
+    all_denied = denied_global | denied_project
+
+    tools = []
+    for tool in CLAUDE_TOOLS:
+        tools.append({
+            "name": tool["name"],
+            "description": tool["description"],
+            "details": tool.get("details", ""),
+            "enabled": tool["name"] not in all_denied,
+            "denied_in": "global" if tool["name"] in denied_global else ("project" if tool["name"] in denied_project else None)
+        })
+
+    return jsonify({"tools": tools})
+
+
+@app.route('/api/claude/tools/<name>')
+@requires_auth
+def get_tool_details(name):
+    """Get detailed info about a specific tool."""
+    for tool in CLAUDE_TOOLS:
+        if tool["name"] == name:
+            global_settings = load_claude_settings("global")
+            project_settings = load_claude_settings("project")
+            denied_global = set(global_settings.get("deniedTools", []))
+            denied_project = set(project_settings.get("deniedTools", []))
+
+            return jsonify({
+                "name": tool["name"],
+                "description": tool["description"],
+                "details": tool.get("details", ""),
+                "enabled": tool["name"] not in (denied_global | denied_project),
+                "denied_in": "global" if tool["name"] in denied_global else ("project" if tool["name"] in denied_project else None)
+            })
+
+    return jsonify({"error": "Tool not found"}), 404
+
+
+@app.route('/api/claude/tools/<name>/toggle', methods=['POST'])
+@requires_auth
+def toggle_tool(name):
+    """Toggle a tool on/off."""
+    data = request.json
+    enabled = data.get("enabled", True)
+    scope = data.get("scope", "project")
+
+    settings = load_claude_settings(scope)
+    denied = set(settings.get("deniedTools", []))
+
+    if enabled:
+        denied.discard(name)
+    else:
+        denied.add(name)
+
+    settings["deniedTools"] = list(denied)
+    save_claude_settings(settings, scope)
+
+    return jsonify({"success": True, "enabled": enabled})
+
+
+@app.route('/api/claude/hooks')
+@requires_auth
+def get_hooks():
+    """Get configured hooks."""
+    global_settings = load_claude_settings("global")
+    project_settings = load_claude_settings("project")
+
+    hooks = []
+
+    for scope, settings in [("global", global_settings), ("project", project_settings)]:
+        for hook in settings.get("hooks", []):
+            hooks.append({
+                "event": hook.get("event", ""),
+                "command": hook.get("command", ""),
+                "scope": scope
+            })
+
+    return jsonify({
+        "hooks": hooks,
+        "available_events": ["PreToolUse", "PostToolUse", "Notification", "Stop"]
+    })
+
+
+@app.route('/api/claude/hooks', methods=['POST'])
+@requires_auth
+def add_hook():
+    """Add a new hook."""
+    data = request.json
+    event = data.get("event")
+    command = data.get("command")
+    scope = data.get("scope", "project")
+
+    if not event or not command:
+        return jsonify({"error": "Event and command required"}), 400
+
+    settings = load_claude_settings(scope)
+    if "hooks" not in settings:
+        settings["hooks"] = []
+
+    settings["hooks"].append({
+        "event": event,
+        "command": command
+    })
+
+    save_claude_settings(settings, scope)
+    return jsonify({"success": True})
+
+
+@app.route('/api/claude/hooks', methods=['DELETE'])
+@requires_auth
+def delete_hook():
+    """Delete a hook."""
+    data = request.json
+    event = data.get("event")
+    command = data.get("command")
+    scope = data.get("scope", "project")
+
+    settings = load_claude_settings(scope)
+    hooks = settings.get("hooks", [])
+
+    settings["hooks"] = [h for h in hooks if not (h.get("event") == event and h.get("command") == command)]
+    save_claude_settings(settings, scope)
+
+    return jsonify({"success": True})
+
+
+@app.route('/api/claude/hooks', methods=['PUT'])
+@requires_auth
+def update_hook():
+    """Update a hook."""
+    data = request.json
+    old_event = data.get("old_event")
+    old_command = data.get("old_command")
+    old_scope = data.get("old_scope", "project")
+
+    new_event = data.get("event")
+    new_command = data.get("command")
+    new_scope = data.get("scope", old_scope)
+
+    if not all([old_event, old_command, new_event, new_command]):
+        return jsonify({"error": "Missing required fields"}), 400
+
+    # If scope changed, remove from old and add to new
+    if old_scope != new_scope:
+        # Remove from old scope
+        old_settings = load_claude_settings(old_scope)
+        old_settings["hooks"] = [h for h in old_settings.get("hooks", [])
+                                  if not (h.get("event") == old_event and h.get("command") == old_command)]
+        save_claude_settings(old_settings, old_scope)
+
+        # Add to new scope
+        new_settings = load_claude_settings(new_scope)
+        if "hooks" not in new_settings:
+            new_settings["hooks"] = []
+        new_settings["hooks"].append({"event": new_event, "command": new_command})
+        save_claude_settings(new_settings, new_scope)
+    else:
+        # Same scope, update in place
+        settings = load_claude_settings(old_scope)
+        hooks = settings.get("hooks", [])
+        for i, h in enumerate(hooks):
+            if h.get("event") == old_event and h.get("command") == old_command:
+                hooks[i] = {"event": new_event, "command": new_command}
+                break
+        settings["hooks"] = hooks
+        save_claude_settings(settings, old_scope)
+
+    return jsonify({"success": True})
 
 
 # ===========================================

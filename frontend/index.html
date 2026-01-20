@@ -264,6 +264,27 @@
                 </div>
             </div>
 
+            <!-- Built-in Tools Section -->
+            <div class="p-4 border-b border-gray-700">
+                <div class="flex items-center justify-between mb-3">
+                    <h3 class="text-sm font-medium text-gray-400">Built-in Tools</h3>
+                </div>
+                <div id="tools-list" class="space-y-2">
+                    <!-- Populated by JS -->
+                </div>
+            </div>
+
+            <!-- Hooks Section -->
+            <div class="p-4 border-b border-gray-700">
+                <div class="flex items-center justify-between mb-3">
+                    <h3 class="text-sm font-medium text-gray-400">Hooks</h3>
+                    <button onclick="showAddHookModal()" class="text-xs px-2 py-1 bg-gray-700 rounded hover:bg-gray-600">+ Add</button>
+                </div>
+                <div id="hooks-list" class="space-y-2">
+                    <!-- Populated by JS -->
+                </div>
+            </div>
+
             <!-- Quick Actions -->
             <div class="p-4">
                 <h3 class="text-sm font-medium text-gray-400 mb-3">Quick Actions</h3>
@@ -352,6 +373,184 @@
                 <div class="flex gap-2 mt-6">
                     <button type="button" onclick="hideAddSkillModal()" class="flex-1 px-4 py-3 bg-gray-700 rounded-lg hover:bg-gray-600">Cancel</button>
                     <button type="submit" class="flex-1 px-4 py-3 bg-blue-600 rounded-lg hover:bg-blue-500">Create</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Add Hook Modal -->
+    <div id="add-hook-modal" class="fixed inset-0 bg-black/50 hidden items-center justify-center z-50 p-4">
+        <div class="bg-gray-800 rounded-xl p-5 w-full max-w-md">
+            <h3 class="text-lg font-semibold mb-4">Add Hook</h3>
+            <form onsubmit="addHook(event)">
+                <div class="space-y-4">
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-1">Event</label>
+                        <select id="hook-event" class="w-full bg-gray-700 rounded-lg px-3 py-3 text-base focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            <option value="PreToolUse">PreToolUse - Before tool runs</option>
+                            <option value="PostToolUse">PostToolUse - After tool runs</option>
+                            <option value="Notification">Notification - On notifications</option>
+                            <option value="Stop">Stop - When Claude stops</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-1">Command</label>
+                        <input type="text" id="hook-command" required placeholder="npm run lint" class="w-full bg-gray-700 rounded-lg px-3 py-3 text-base focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    </div>
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-1">Scope</label>
+                        <select id="hook-scope" class="w-full bg-gray-700 rounded-lg px-3 py-3 text-base focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            <option value="project">Project</option>
+                            <option value="global">Global</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="flex gap-2 mt-6">
+                    <button type="button" onclick="hideAddHookModal()" class="flex-1 px-4 py-3 bg-gray-700 rounded-lg hover:bg-gray-600">Cancel</button>
+                    <button type="submit" class="flex-1 px-4 py-3 bg-blue-600 rounded-lg hover:bg-blue-500">Add</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- View/Edit MCP Modal -->
+    <div id="view-mcp-modal" class="fixed inset-0 bg-black/50 hidden items-center justify-center z-50 p-4">
+        <div class="bg-gray-800 rounded-xl p-5 w-full max-w-md">
+            <div class="flex justify-between items-start mb-4">
+                <h3 class="text-lg font-semibold">MCP Server</h3>
+                <button onclick="hideViewMcpModal()" class="text-gray-500 hover:text-gray-300 p-1 -mr-1">✕</button>
+            </div>
+            <form onsubmit="updateMcpServer(event)">
+                <input type="hidden" id="view-mcp-original-name">
+                <input type="hidden" id="view-mcp-scope">
+                <div class="space-y-4">
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-1">Name</label>
+                        <input type="text" id="view-mcp-name" required class="w-full bg-gray-700 rounded-lg px-3 py-3 text-base focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    </div>
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-1">Command</label>
+                        <input type="text" id="view-mcp-command" required class="w-full bg-gray-700 rounded-lg px-3 py-3 text-base focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    </div>
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-1">Arguments</label>
+                        <input type="text" id="view-mcp-args" class="w-full bg-gray-700 rounded-lg px-3 py-3 text-base focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    </div>
+                    <div class="flex items-center justify-between">
+                        <span class="text-sm text-gray-400">Enabled</span>
+                        <label class="relative inline-flex items-center cursor-pointer">
+                            <input type="checkbox" id="view-mcp-enabled" class="sr-only peer">
+                            <div class="w-11 h-6 bg-gray-600 peer-focus:ring-2 peer-focus:ring-blue-500 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                        </label>
+                    </div>
+                    <div class="text-xs text-gray-500">
+                        Scope: <span id="view-mcp-scope-display" class="text-gray-400"></span>
+                    </div>
+                </div>
+                <div class="flex gap-2 mt-6">
+                    <button type="button" onclick="deleteMcpFromModal()" class="px-4 py-3 bg-red-600/20 text-red-400 rounded-lg hover:bg-red-600/30">Delete</button>
+                    <button type="button" onclick="hideViewMcpModal()" class="flex-1 px-4 py-3 bg-gray-700 rounded-lg hover:bg-gray-600">Cancel</button>
+                    <button type="submit" class="flex-1 px-4 py-3 bg-blue-600 rounded-lg hover:bg-blue-500">Save</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- View/Edit Hook Modal -->
+    <div id="view-hook-modal" class="fixed inset-0 bg-black/50 hidden items-center justify-center z-50 p-4">
+        <div class="bg-gray-800 rounded-xl p-5 w-full max-w-md">
+            <div class="flex justify-between items-start mb-4">
+                <h3 class="text-lg font-semibold">Hook</h3>
+                <button onclick="hideViewHookModal()" class="text-gray-500 hover:text-gray-300 p-1 -mr-1">✕</button>
+            </div>
+            <form onsubmit="updateHook(event)">
+                <input type="hidden" id="view-hook-old-event">
+                <input type="hidden" id="view-hook-old-command">
+                <input type="hidden" id="view-hook-old-scope">
+                <div class="space-y-4">
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-1">Event</label>
+                        <select id="view-hook-event" class="w-full bg-gray-700 rounded-lg px-3 py-3 text-base focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            <option value="PreToolUse">PreToolUse - Before tool runs</option>
+                            <option value="PostToolUse">PostToolUse - After tool runs</option>
+                            <option value="Notification">Notification - On notifications</option>
+                            <option value="Stop">Stop - When Claude stops</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-1">Command</label>
+                        <input type="text" id="view-hook-command" required class="w-full bg-gray-700 rounded-lg px-3 py-3 text-base focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    </div>
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-1">Scope</label>
+                        <select id="view-hook-scope" class="w-full bg-gray-700 rounded-lg px-3 py-3 text-base focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            <option value="project">Project</option>
+                            <option value="global">Global</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="flex gap-2 mt-6">
+                    <button type="button" onclick="deleteHookFromModal()" class="px-4 py-3 bg-red-600/20 text-red-400 rounded-lg hover:bg-red-600/30">Delete</button>
+                    <button type="button" onclick="hideViewHookModal()" class="flex-1 px-4 py-3 bg-gray-700 rounded-lg hover:bg-gray-600">Cancel</button>
+                    <button type="submit" class="flex-1 px-4 py-3 bg-blue-600 rounded-lg hover:bg-blue-500">Save</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- View Tool Modal -->
+    <div id="view-tool-modal" class="fixed inset-0 bg-black/50 hidden items-center justify-center z-50 p-4">
+        <div class="bg-gray-800 rounded-xl p-5 w-full max-w-md">
+            <div class="flex justify-between items-start mb-4">
+                <h3 id="view-tool-name" class="text-lg font-semibold"></h3>
+                <button onclick="hideViewToolModal()" class="text-gray-500 hover:text-gray-300 p-1 -mr-1">✕</button>
+            </div>
+            <div class="space-y-4">
+                <div>
+                    <label class="block text-sm text-gray-400 mb-1">Description</label>
+                    <p id="view-tool-description" class="text-sm"></p>
+                </div>
+                <div>
+                    <label class="block text-sm text-gray-400 mb-1">Details</label>
+                    <p id="view-tool-details" class="text-sm text-gray-300"></p>
+                </div>
+                <div class="flex items-center justify-between p-3 bg-gray-700 rounded-lg">
+                    <span class="text-sm">Enabled</span>
+                    <label class="relative inline-flex items-center cursor-pointer">
+                        <input type="checkbox" id="view-tool-enabled" onchange="toggleToolFromModal()" class="sr-only peer">
+                        <div class="w-11 h-6 bg-gray-600 peer-focus:ring-2 peer-focus:ring-blue-500 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                    </label>
+                </div>
+                <div id="view-tool-denied-info" class="text-xs text-yellow-400 hidden"></div>
+            </div>
+            <div class="flex gap-2 mt-6">
+                <button type="button" onclick="hideViewToolModal()" class="flex-1 px-4 py-3 bg-gray-700 rounded-lg hover:bg-gray-600">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- View/Edit Skill Modal -->
+    <div id="view-skill-modal" class="fixed inset-0 bg-black/50 hidden items-center justify-center z-50 p-4">
+        <div class="bg-gray-800 rounded-xl p-5 w-full max-w-md max-h-[90vh] overflow-y-auto">
+            <div class="flex justify-between items-start mb-4">
+                <h3 id="view-skill-name" class="text-lg font-semibold"></h3>
+                <button onclick="hideViewSkillModal()" class="text-gray-500 hover:text-gray-300 p-1 -mr-1">✕</button>
+            </div>
+            <form onsubmit="updateSkill(event)">
+                <input type="hidden" id="view-skill-path">
+                <div class="space-y-4">
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-1">Content</label>
+                        <textarea id="view-skill-content" rows="12" class="w-full bg-gray-700 rounded-lg px-3 py-3 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500"></textarea>
+                    </div>
+                    <div class="text-xs text-gray-500">
+                        Path: <span id="view-skill-path-display" class="text-gray-400"></span>
+                    </div>
+                </div>
+                <div class="flex gap-2 mt-6">
+                    <button type="button" onclick="deleteSkillFromModal()" class="px-4 py-3 bg-red-600/20 text-red-400 rounded-lg hover:bg-red-600/30">Delete</button>
+                    <button type="button" onclick="hideViewSkillModal()" class="flex-1 px-4 py-3 bg-gray-700 rounded-lg hover:bg-gray-600">Cancel</button>
+                    <button type="submit" class="flex-1 px-4 py-3 bg-blue-600 rounded-lg hover:bg-blue-500">Save</button>
                 </div>
             </form>
         </div>
@@ -514,6 +713,8 @@
             if (view === 'tools') {
                 loadMcpServers();
                 loadSkills();
+                loadBuiltinTools();
+                loadHooks();
             }
         }
 
@@ -955,13 +1156,13 @@
                 if (data.servers && data.servers.length > 0) {
                     data.servers.forEach(server => {
                         const div = document.createElement('div');
-                        div.className = 'flex items-center justify-between p-2 bg-gray-800 rounded-lg';
+                        div.className = 'flex items-center justify-between p-2 bg-gray-800 rounded-lg cursor-pointer hover:bg-gray-700';
                         div.innerHTML = `
-                            <div class="flex-1 min-w-0">
+                            <div class="flex-1 min-w-0" onclick="showViewMcpModal('${server.name}', '${server.scope}')">
                                 <div class="text-sm font-medium truncate">${server.name}</div>
-                                <div class="text-xs text-gray-500">${server.scope}</div>
+                                <div class="text-xs text-gray-500">${server.scope} • ${server.command}</div>
                             </div>
-                            <label class="relative inline-flex items-center cursor-pointer ml-2">
+                            <label class="relative inline-flex items-center cursor-pointer ml-2" onclick="event.stopPropagation()">
                                 <input type="checkbox" ${server.enabled ? 'checked' : ''} onchange="toggleMcp('${server.name}', '${server.scope}', this.checked)" class="sr-only peer">
                                 <div class="w-9 h-5 bg-gray-600 peer-focus:ring-2 peer-focus:ring-blue-500 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-600"></div>
                             </label>
@@ -1038,7 +1239,7 @@
                     data.skills.forEach(skill => {
                         const div = document.createElement('div');
                         div.className = 'p-2 bg-gray-800 rounded-lg cursor-pointer hover:bg-gray-700';
-                        div.onclick = () => viewSkill(skill.file);
+                        div.onclick = () => showViewSkillModal(skill.file, skill.name);
                         div.innerHTML = `
                             <div class="text-sm font-medium">${skill.name}</div>
                             <div class="text-xs text-gray-500">${skill.description || skill.scope}</div>
@@ -1050,19 +1251,6 @@
                 }
             } catch (error) {
                 console.error('Failed to load skills:', error);
-            }
-        }
-
-        async function viewSkill(filePath) {
-            try {
-                const response = await fetch(`${API_BASE}/claude/skills${filePath}`);
-                const data = await response.json();
-                if (data.content) {
-                    showView('chat');
-                    addChatMessage('**Skill Content:**\n```markdown\n' + data.content + '\n```', 'assistant');
-                }
-            } catch (error) {
-                console.error('Failed to view skill:', error);
             }
         }
 
@@ -1103,6 +1291,413 @@
                 document.getElementById('skill-solution').value = '';
             } catch (error) {
                 console.error('Failed to create skill:', error);
+            }
+        }
+
+        // ===========================================
+        // Built-in Tools Management
+        // ===========================================
+
+        async function loadBuiltinTools() {
+            try {
+                const response = await fetch(`${API_BASE}/claude/tools`);
+                const data = await response.json();
+
+                const list = document.getElementById('tools-list');
+                list.innerHTML = '';
+
+                if (data.tools && data.tools.length > 0) {
+                    data.tools.forEach(tool => {
+                        const div = document.createElement('div');
+                        div.className = 'flex items-center justify-between p-2 bg-gray-800 rounded-lg cursor-pointer hover:bg-gray-700';
+                        div.innerHTML = `
+                            <div class="flex-1 min-w-0" onclick="showViewToolModal('${tool.name}')">
+                                <div class="text-sm font-medium">${tool.name}</div>
+                                <div class="text-xs text-gray-500">${tool.description}</div>
+                            </div>
+                            <label class="relative inline-flex items-center cursor-pointer ml-2" onclick="event.stopPropagation()">
+                                <input type="checkbox" ${tool.enabled ? 'checked' : ''} onchange="toggleTool('${tool.name}', this.checked)" class="sr-only peer">
+                                <div class="w-9 h-5 bg-gray-600 peer-focus:ring-2 peer-focus:ring-blue-500 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-600"></div>
+                            </label>
+                        `;
+                        list.appendChild(div);
+                    });
+                }
+            } catch (error) {
+                console.error('Failed to load tools:', error);
+            }
+        }
+
+        async function toggleTool(name, enabled) {
+            try {
+                await fetch(`${API_BASE}/claude/tools/${name}/toggle`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ enabled, scope: 'project' })
+                });
+            } catch (error) {
+                console.error('Failed to toggle tool:', error);
+            }
+        }
+
+        // ===========================================
+        // Hooks Management
+        // ===========================================
+
+        async function loadHooks() {
+            try {
+                const response = await fetch(`${API_BASE}/claude/hooks`);
+                const data = await response.json();
+
+                const list = document.getElementById('hooks-list');
+                list.innerHTML = '';
+
+                if (data.hooks && data.hooks.length > 0) {
+                    data.hooks.forEach(hook => {
+                        const div = document.createElement('div');
+                        div.className = 'flex items-center justify-between p-2 bg-gray-800 rounded-lg cursor-pointer hover:bg-gray-700';
+                        div.innerHTML = `
+                            <div class="flex-1 min-w-0" onclick="showViewHookModal('${hook.event}', '${escapeHtml(hook.command)}', '${hook.scope}')">
+                                <div class="text-sm font-medium">${hook.event}</div>
+                                <div class="text-xs text-gray-500 truncate">${hook.scope} • ${escapeHtml(hook.command)}</div>
+                            </div>
+                            <button onclick="event.stopPropagation(); deleteHook('${hook.event}', '${escapeHtml(hook.command)}', '${hook.scope}')" class="ml-2 p-1 text-red-400 hover:text-red-300">
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                                </svg>
+                            </button>
+                        `;
+                        list.appendChild(div);
+                    });
+                } else {
+                    list.innerHTML = '<div class="text-sm text-gray-500">No hooks configured</div>';
+                }
+            } catch (error) {
+                console.error('Failed to load hooks:', error);
+            }
+        }
+
+        function escapeHtml(str) {
+            return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
+        }
+
+        function showAddHookModal() {
+            document.getElementById('add-hook-modal').classList.remove('hidden');
+            document.getElementById('add-hook-modal').classList.add('flex');
+        }
+
+        function hideAddHookModal() {
+            document.getElementById('add-hook-modal').classList.add('hidden');
+            document.getElementById('add-hook-modal').classList.remove('flex');
+        }
+
+        async function addHook(event) {
+            event.preventDefault();
+
+            const data = {
+                event: document.getElementById('hook-event').value,
+                command: document.getElementById('hook-command').value,
+                scope: document.getElementById('hook-scope').value
+            };
+
+            try {
+                await fetch(`${API_BASE}/claude/hooks`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                });
+                hideAddHookModal();
+                loadHooks();
+
+                document.getElementById('hook-command').value = '';
+            } catch (error) {
+                console.error('Failed to add hook:', error);
+            }
+        }
+
+        async function deleteHook(event, command, scope) {
+            if (confirm(`Delete hook "${event}"?`)) {
+                try {
+                    await fetch(`${API_BASE}/claude/hooks`, {
+                        method: 'DELETE',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ event, command, scope })
+                    });
+                    loadHooks();
+                } catch (error) {
+                    console.error('Failed to delete hook:', error);
+                }
+            }
+        }
+
+        // ===========================================
+        // View/Edit Modal Functions
+        // ===========================================
+
+        // --- MCP Modal ---
+        let currentMcpData = null;
+
+        async function showViewMcpModal(name, scope) {
+            try {
+                const response = await fetch(`${API_BASE}/claude/mcp/${name}?scope=${scope}`);
+                const data = await response.json();
+
+                if (data.error) {
+                    alert(data.error);
+                    return;
+                }
+
+                currentMcpData = data;
+                document.getElementById('view-mcp-original-name').value = name;
+                document.getElementById('view-mcp-scope').value = scope;
+                document.getElementById('view-mcp-name').value = name;
+                document.getElementById('view-mcp-command').value = data.command || '';
+                document.getElementById('view-mcp-args').value = (data.args || []).join(' ');
+                document.getElementById('view-mcp-enabled').checked = data.enabled;
+                document.getElementById('view-mcp-scope-display').textContent = scope;
+
+                document.getElementById('view-mcp-modal').classList.remove('hidden');
+                document.getElementById('view-mcp-modal').classList.add('flex');
+            } catch (error) {
+                console.error('Failed to load MCP server:', error);
+            }
+        }
+
+        function hideViewMcpModal() {
+            document.getElementById('view-mcp-modal').classList.add('hidden');
+            document.getElementById('view-mcp-modal').classList.remove('flex');
+            currentMcpData = null;
+        }
+
+        async function updateMcpServer(event) {
+            event.preventDefault();
+
+            const originalName = document.getElementById('view-mcp-original-name').value;
+            const scope = document.getElementById('view-mcp-scope').value;
+            const name = document.getElementById('view-mcp-name').value;
+            const command = document.getElementById('view-mcp-command').value;
+            const args = document.getElementById('view-mcp-args').value.split(' ').filter(a => a);
+            const enabled = document.getElementById('view-mcp-enabled').checked;
+
+            try {
+                // Update server config
+                await fetch(`${API_BASE}/claude/mcp/${originalName}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name, command, args, scope })
+                });
+
+                // Update enabled state if changed
+                if (currentMcpData && currentMcpData.enabled !== enabled) {
+                    await fetch(`${API_BASE}/claude/mcp/${name}/toggle`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ scope, enabled })
+                    });
+                }
+
+                hideViewMcpModal();
+                loadMcpServers();
+            } catch (error) {
+                console.error('Failed to update MCP server:', error);
+            }
+        }
+
+        async function deleteMcpFromModal() {
+            const name = document.getElementById('view-mcp-original-name').value;
+            const scope = document.getElementById('view-mcp-scope').value;
+
+            if (confirm(`Delete MCP server "${name}"?`)) {
+                try {
+                    await fetch(`${API_BASE}/claude/mcp/${name}`, {
+                        method: 'DELETE',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ scope })
+                    });
+                    hideViewMcpModal();
+                    loadMcpServers();
+                } catch (error) {
+                    console.error('Failed to delete MCP server:', error);
+                }
+            }
+        }
+
+        // --- Hook Modal ---
+        function showViewHookModal(event, command, scope) {
+            document.getElementById('view-hook-old-event').value = event;
+            document.getElementById('view-hook-old-command').value = command;
+            document.getElementById('view-hook-old-scope').value = scope;
+            document.getElementById('view-hook-event').value = event;
+            document.getElementById('view-hook-command').value = command;
+            document.getElementById('view-hook-scope').value = scope;
+
+            document.getElementById('view-hook-modal').classList.remove('hidden');
+            document.getElementById('view-hook-modal').classList.add('flex');
+        }
+
+        function hideViewHookModal() {
+            document.getElementById('view-hook-modal').classList.add('hidden');
+            document.getElementById('view-hook-modal').classList.remove('flex');
+        }
+
+        async function updateHook(event) {
+            event.preventDefault();
+
+            const oldEvent = document.getElementById('view-hook-old-event').value;
+            const oldCommand = document.getElementById('view-hook-old-command').value;
+            const oldScope = document.getElementById('view-hook-old-scope').value;
+            const newEvent = document.getElementById('view-hook-event').value;
+            const newCommand = document.getElementById('view-hook-command').value;
+            const newScope = document.getElementById('view-hook-scope').value;
+
+            try {
+                await fetch(`${API_BASE}/claude/hooks`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        old_event: oldEvent,
+                        old_command: oldCommand,
+                        old_scope: oldScope,
+                        event: newEvent,
+                        command: newCommand,
+                        scope: newScope
+                    })
+                });
+                hideViewHookModal();
+                loadHooks();
+            } catch (error) {
+                console.error('Failed to update hook:', error);
+            }
+        }
+
+        async function deleteHookFromModal() {
+            const event = document.getElementById('view-hook-old-event').value;
+            const command = document.getElementById('view-hook-old-command').value;
+            const scope = document.getElementById('view-hook-old-scope').value;
+
+            if (confirm(`Delete hook "${event}"?`)) {
+                try {
+                    await fetch(`${API_BASE}/claude/hooks`, {
+                        method: 'DELETE',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ event, command, scope })
+                    });
+                    hideViewHookModal();
+                    loadHooks();
+                } catch (error) {
+                    console.error('Failed to delete hook:', error);
+                }
+            }
+        }
+
+        // --- Tool Modal ---
+        let currentToolName = null;
+
+        async function showViewToolModal(name) {
+            try {
+                const response = await fetch(`${API_BASE}/claude/tools/${name}`);
+                const data = await response.json();
+
+                if (data.error) {
+                    alert(data.error);
+                    return;
+                }
+
+                currentToolName = name;
+                document.getElementById('view-tool-name').textContent = data.name;
+                document.getElementById('view-tool-description').textContent = data.description;
+                document.getElementById('view-tool-details').textContent = data.details || 'No additional details available.';
+                document.getElementById('view-tool-enabled').checked = data.enabled;
+
+                const deniedInfo = document.getElementById('view-tool-denied-info');
+                if (data.denied_in) {
+                    deniedInfo.textContent = `Disabled in ${data.denied_in} settings`;
+                    deniedInfo.classList.remove('hidden');
+                } else {
+                    deniedInfo.classList.add('hidden');
+                }
+
+                document.getElementById('view-tool-modal').classList.remove('hidden');
+                document.getElementById('view-tool-modal').classList.add('flex');
+            } catch (error) {
+                console.error('Failed to load tool details:', error);
+            }
+        }
+
+        function hideViewToolModal() {
+            document.getElementById('view-tool-modal').classList.add('hidden');
+            document.getElementById('view-tool-modal').classList.remove('flex');
+            currentToolName = null;
+        }
+
+        async function toggleToolFromModal() {
+            if (!currentToolName) return;
+            const enabled = document.getElementById('view-tool-enabled').checked;
+            await toggleTool(currentToolName, enabled);
+            loadBuiltinTools();
+        }
+
+        // --- Skill Modal ---
+        async function showViewSkillModal(filePath, name) {
+            try {
+                const response = await fetch(`${API_BASE}/claude/skills${filePath}`);
+                const data = await response.json();
+
+                if (data.error) {
+                    alert(data.error);
+                    return;
+                }
+
+                document.getElementById('view-skill-name').textContent = name;
+                document.getElementById('view-skill-path').value = filePath;
+                document.getElementById('view-skill-path-display').textContent = filePath;
+                document.getElementById('view-skill-content').value = data.content;
+
+                document.getElementById('view-skill-modal').classList.remove('hidden');
+                document.getElementById('view-skill-modal').classList.add('flex');
+            } catch (error) {
+                console.error('Failed to load skill:', error);
+            }
+        }
+
+        function hideViewSkillModal() {
+            document.getElementById('view-skill-modal').classList.add('hidden');
+            document.getElementById('view-skill-modal').classList.remove('flex');
+        }
+
+        async function updateSkill(event) {
+            event.preventDefault();
+
+            const filePath = document.getElementById('view-skill-path').value;
+            const content = document.getElementById('view-skill-content').value;
+
+            try {
+                await fetch(`${API_BASE}/claude/skills${filePath}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ content })
+                });
+                hideViewSkillModal();
+                loadSkills();
+            } catch (error) {
+                console.error('Failed to update skill:', error);
+            }
+        }
+
+        async function deleteSkillFromModal() {
+            const filePath = document.getElementById('view-skill-path').value;
+            const name = document.getElementById('view-skill-name').textContent;
+
+            if (confirm(`Delete skill "${name}"?`)) {
+                try {
+                    await fetch(`${API_BASE}/claude/skills${filePath}`, {
+                        method: 'DELETE'
+                    });
+                    hideViewSkillModal();
+                    loadSkills();
+                } catch (error) {
+                    console.error('Failed to delete skill:', error);
+                }
             }
         }
     </script>
