@@ -10,7 +10,7 @@
 #   - DigitalOcean
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/StreetsDigital/vibes/claude/evaluate-pageindex-zFMFu/deploy/setup-server.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/StreetsDigital/vibes/master/deploy/setup-server.sh | bash
 #   # Or:
 #   ./setup-server.sh
 #
@@ -36,7 +36,7 @@ error() { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
 VIBES_USER="vibes"
 VIBES_HOME="/home/${VIBES_USER}"
 VIBES_REPO="https://github.com/StreetsDigital/vibes.git"
-VIBES_BRANCH="claude/evaluate-pageindex-zFMFu"
+VIBES_BRANCH="master"
 PROJECTS_DIR="${VIBES_HOME}/projects"
 
 # ===========================================

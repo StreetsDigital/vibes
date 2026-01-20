@@ -28,10 +28,10 @@ SSH into your instance and run:
 
 ```bash
 # Option A: One-liner
-curl -fsSL https://raw.githubusercontent.com/StreetsDigital/vibes/claude/evaluate-pageindex-zFMFu/lightsail/setup.sh | bash
+curl -fsSL https://raw.githubusercontent.com/StreetsDigital/vibes/master/lightsail/setup.sh | bash
 
 # Option B: Clone and run
-git clone -b claude/evaluate-pageindex-zFMFu https://github.com/StreetsDigital/vibes.git
+git clone https://github.com/StreetsDigital/vibes.git
 cd vibes/lightsail
 chmod +x setup.sh
 ./setup.sh

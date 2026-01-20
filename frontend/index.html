@@ -2,173 +2,628 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Vibes - Task Board</title>
+
+    <!-- PWA -->
+    <link rel="manifest" href="/manifest.json">
+    <meta name="theme-color" content="#3b82f6">
+
+    <!-- iOS PWA -->
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Vibes">
+    <link rel="apple-touch-icon" href="/icon.svg">
+
     <script src="https://unpkg.com/htmx.org@1.9.10"></script>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         .drag-over { background-color: rgba(59, 130, 246, 0.1); }
         .dragging { opacity: 0.5; }
-        [data-loading] { display: none; }
-        .htmx-request [data-loading] { display: block; }
-        .htmx-request [data-content] { opacity: 0.5; }
+
+        /* Chat content styling */
+        .chat-content { word-break: break-word; }
+        .chat-content pre { white-space: pre-wrap; word-wrap: break-word; }
+        .chat-content code { font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace; }
+
+        /* Mobile kanban scroll */
+        .kanban-scroll {
+            -webkit-overflow-scrolling: touch;
+            scrollbar-width: none;
+        }
+        .kanban-scroll::-webkit-scrollbar { display: none; }
+
+        /* Safe area for notched phones */
+        @supports (padding-bottom: env(safe-area-inset-bottom)) {
+            .safe-bottom { padding-bottom: env(safe-area-inset-bottom); }
+        }
+
+        /* Active tab indicator */
+        .tab-active { border-bottom: 2px solid #3b82f6; color: #3b82f6; }
+
+        /* Pulse animation for loading */
+        @keyframes pulse-dot {
+            0%, 100% { opacity: 0.4; }
+            50% { opacity: 1; }
+        }
+        .loading-dot { animation: pulse-dot 1.4s ease-in-out infinite; }
+        .loading-dot:nth-child(2) { animation-delay: 0.2s; }
+        .loading-dot:nth-child(3) { animation-delay: 0.4s; }
     </style>
 </head>
-<body class="bg-gray-900 text-gray-100 min-h-screen">
+<body class="bg-gray-900 text-gray-100 min-h-screen flex flex-col">
     <!-- Header -->
-    <header class="bg-gray-800 border-b border-gray-700 px-6 py-4">
-        <div class="flex items-center justify-between max-w-7xl mx-auto">
-            <h1 class="text-xl font-bold text-blue-400">⚡ Vibes</h1>
-            <div class="flex items-center gap-4">
-                <span id="stats" class="text-sm text-gray-400">Loading...</span>
-                <button onclick="refreshBoard()" class="px-3 py-1 bg-gray-700 rounded hover:bg-gray-600 text-sm">
-                    ↻ Refresh
+    <header class="bg-gray-800 border-b border-gray-700 px-4 py-3 flex-shrink-0">
+        <div class="flex items-center justify-between">
+            <div class="flex items-center gap-2">
+                <h1 class="text-lg font-bold text-blue-400">⚡</h1>
+                <!-- Project Dropdown -->
+                <div class="relative">
+                    <button onclick="toggleProjectDropdown()" id="project-btn" class="flex items-center gap-1 px-2 py-1 bg-gray-700 rounded-lg hover:bg-gray-600 text-sm">
+                        <span id="current-project">vibes</span>
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+                        </svg>
+                    </button>
+                    <div id="project-dropdown" class="hidden absolute left-0 mt-1 w-48 bg-gray-800 border border-gray-700 rounded-lg shadow-lg z-50">
+                        <div id="project-list" class="py-1 max-h-60 overflow-y-auto">
+                            <!-- Projects populated by JS -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="flex items-center gap-2">
+                <span id="stats" class="text-xs text-gray-400 hidden sm:inline">Loading...</span>
+                <button onclick="refreshBoard()" class="p-2 bg-gray-700 rounded-lg hover:bg-gray-600 active:bg-gray-500 text-sm">
+                    ↻
                 </button>
             </div>
         </div>
     </header>
 
-    <div class="flex max-w-7xl mx-auto">
+    <!-- Mobile Tab Bar -->
+    <div class="md:hidden flex border-b border-gray-700 bg-gray-800 flex-shrink-0">
+        <button id="tab-board" onclick="showView('board')" class="flex-1 py-3 text-sm font-medium text-center tab-active">
+            Board
+        </button>
+        <button id="tab-chat" onclick="showView('chat')" class="flex-1 py-3 text-sm font-medium text-center text-gray-400">
+            Claude
+        </button>
+        <button id="tab-tools" onclick="showView('tools')" class="flex-1 py-3 text-sm font-medium text-center text-gray-400">
+            Tools
+        </button>
+    </div>
+
+    <!-- Main Content -->
+    <div class="flex flex-1 overflow-hidden">
         <!-- Kanban Board -->
-        <main class="flex-1 p-6">
-            <div class="grid grid-cols-4 gap-4">
-                <!-- To Do -->
-                <div class="bg-gray-800 rounded-lg p-4">
-                    <h2 class="font-semibold text-gray-300 mb-4 flex items-center gap-2">
-                        <span class="w-3 h-3 bg-gray-500 rounded-full"></span>
-                        To Do
-                        <span id="todo-count" class="text-xs bg-gray-700 px-2 py-0.5 rounded-full">0</span>
-                    </h2>
-                    <div id="todo" class="space-y-2 min-h-[200px]" ondragover="allowDrop(event)" ondrop="drop(event, 'pending')">
+        <main id="view-board" class="flex-1 flex flex-col overflow-hidden">
+            <!-- Kanban Columns - horizontal scroll on mobile -->
+            <div class="flex-1 overflow-x-auto overflow-y-auto kanban-scroll p-4">
+                <div class="flex md:grid md:grid-cols-4 gap-3 min-w-max md:min-w-0">
+                    <!-- To Do -->
+                    <div class="w-72 md:w-auto bg-gray-800 rounded-lg p-3 flex-shrink-0">
+                        <h2 class="font-semibold text-gray-300 mb-3 flex items-center gap-2 text-sm">
+                            <span class="w-2.5 h-2.5 bg-gray-500 rounded-full"></span>
+                            To Do
+                            <span id="todo-count" class="text-xs bg-gray-700 px-2 py-0.5 rounded-full">0</span>
+                        </h2>
+                        <div id="todo" class="space-y-2 min-h-[150px]" ondragover="allowDrop(event)" ondrop="drop(event, 'pending')">
+                        </div>
                     </div>
-                </div>
 
-                <!-- In Progress -->
-                <div class="bg-gray-800 rounded-lg p-4">
-                    <h2 class="font-semibold text-gray-300 mb-4 flex items-center gap-2">
-                        <span class="w-3 h-3 bg-blue-500 rounded-full"></span>
-                        In Progress
-                        <span id="progress-count" class="text-xs bg-gray-700 px-2 py-0.5 rounded-full">0</span>
-                    </h2>
-                    <div id="in_progress" class="space-y-2 min-h-[200px]" ondragover="allowDrop(event)" ondrop="drop(event, 'in_progress')">
+                    <!-- In Progress -->
+                    <div class="w-72 md:w-auto bg-gray-800 rounded-lg p-3 flex-shrink-0">
+                        <h2 class="font-semibold text-gray-300 mb-3 flex items-center gap-2 text-sm">
+                            <span class="w-2.5 h-2.5 bg-blue-500 rounded-full"></span>
+                            In Progress
+                            <span id="progress-count" class="text-xs bg-gray-700 px-2 py-0.5 rounded-full">0</span>
+                        </h2>
+                        <div id="in_progress" class="space-y-2 min-h-[150px]" ondragover="allowDrop(event)" ondrop="drop(event, 'in_progress')">
+                        </div>
                     </div>
-                </div>
 
-                <!-- Review -->
-                <div class="bg-gray-800 rounded-lg p-4">
-                    <h2 class="font-semibold text-gray-300 mb-4 flex items-center gap-2">
-                        <span class="w-3 h-3 bg-yellow-500 rounded-full"></span>
-                        Review
-                        <span id="review-count" class="text-xs bg-gray-700 px-2 py-0.5 rounded-full">0</span>
-                    </h2>
-                    <div id="needs_review" class="space-y-2 min-h-[200px]" ondragover="allowDrop(event)" ondrop="drop(event, 'needs_review')">
+                    <!-- Review -->
+                    <div class="w-72 md:w-auto bg-gray-800 rounded-lg p-3 flex-shrink-0">
+                        <h2 class="font-semibold text-gray-300 mb-3 flex items-center gap-2 text-sm">
+                            <span class="w-2.5 h-2.5 bg-yellow-500 rounded-full"></span>
+                            Review
+                            <span id="review-count" class="text-xs bg-gray-700 px-2 py-0.5 rounded-full">0</span>
+                        </h2>
+                        <div id="needs_review" class="space-y-2 min-h-[150px]" ondragover="allowDrop(event)" ondrop="drop(event, 'needs_review')">
+                        </div>
                     </div>
-                </div>
 
-                <!-- Done -->
-                <div class="bg-gray-800 rounded-lg p-4">
-                    <h2 class="font-semibold text-gray-300 mb-4 flex items-center gap-2">
-                        <span class="w-3 h-3 bg-green-500 rounded-full"></span>
-                        Done
-                        <span id="done-count" class="text-xs bg-gray-700 px-2 py-0.5 rounded-full">0</span>
-                    </h2>
-                    <div id="passing" class="space-y-2 min-h-[200px]" ondragover="allowDrop(event)" ondrop="drop(event, 'passing')">
+                    <!-- Done -->
+                    <div class="w-72 md:w-auto bg-gray-800 rounded-lg p-3 flex-shrink-0">
+                        <h2 class="font-semibold text-gray-300 mb-3 flex items-center gap-2 text-sm">
+                            <span class="w-2.5 h-2.5 bg-green-500 rounded-full"></span>
+                            Done
+                            <span id="done-count" class="text-xs bg-gray-700 px-2 py-0.5 rounded-full">0</span>
+                        </h2>
+                        <div id="passing" class="space-y-2 min-h-[150px]" ondragover="allowDrop(event)" ondrop="drop(event, 'passing')">
+                        </div>
                     </div>
                 </div>
             </div>
 
-            <!-- Add Task -->
-            <div class="mt-6">
-                <button onclick="showAddTask()" class="px-4 py-2 bg-blue-600 rounded-lg hover:bg-blue-500 text-sm font-medium">
+            <!-- Add Task Button -->
+            <div class="p-4 border-t border-gray-700 flex-shrink-0 safe-bottom">
+                <button onclick="showAddTask()" class="w-full md:w-auto px-4 py-3 bg-blue-600 rounded-lg hover:bg-blue-500 active:bg-blue-700 text-sm font-medium">
                     + Add Task
                 </button>
             </div>
         </main>
 
         <!-- Claude Chat Sidebar -->
-        <aside class="w-96 bg-gray-800 border-l border-gray-700 flex flex-col h-[calc(100vh-73px)]">
-            <div class="p-4 border-b border-gray-700">
-                <h2 class="font-semibold text-gray-300">Claude</h2>
-                <p class="text-xs text-gray-500">Ask about tasks or get help</p>
+        <aside id="view-chat" class="hidden md:flex w-full md:w-96 bg-gray-900 md:bg-gray-800 md:border-l border-gray-700 flex-col h-full">
+            <!-- Chat Header - Claude Code style -->
+            <div class="bg-gray-800 rounded-xl mx-3 mt-3 p-3 flex items-center justify-between flex-shrink-0">
+                <div class="flex-1 min-w-0">
+                    <p id="branch-name" class="text-sm text-gray-300 truncate">main</p>
+                </div>
+                <button onclick="quickPrompt('Create a PR for current changes')" class="ml-2 px-3 py-1 text-sm font-medium hover:bg-gray-700 rounded">
+                    View PR
+                </button>
+                <button onclick="showActionMenu()" class="ml-1 p-1.5 hover:bg-gray-700 rounded">
+                    <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                        <path d="M10 6a2 2 0 110-4 2 2 0 010 4zM10 12a2 2 0 110-4 2 2 0 010 4zM10 18a2 2 0 110-4 2 2 0 010 4z"/>
+                    </svg>
+                </button>
             </div>
 
             <!-- Chat Messages -->
-            <div id="chat-messages" class="flex-1 overflow-y-auto p-4 space-y-4">
+            <div id="chat-messages" class="flex-1 overflow-y-auto p-4 space-y-3">
                 <div class="text-gray-500 text-sm text-center py-8">
                     Start a conversation with Claude
                 </div>
             </div>
 
-            <!-- Chat Input -->
-            <div class="p-4 border-t border-gray-700">
-                <form id="chat-form" onsubmit="sendMessage(event)" class="flex gap-2">
-                    <input
-                        type="text"
-                        id="chat-input"
-                        placeholder="Ask Claude..."
-                        class="flex-1 bg-gray-700 rounded-lg px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    >
-                    <button type="submit" class="px-4 py-2 bg-blue-600 rounded-lg hover:bg-blue-500 text-sm">
-                        Send
+            <!-- Chat Input - Claude Code style -->
+            <div class="p-3 flex-shrink-0 safe-bottom">
+                <div class="bg-gray-800 rounded-xl p-3">
+                    <form id="chat-form" onsubmit="sendMessage(event)">
+                        <textarea
+                            id="chat-input"
+                            placeholder="Add feedback..."
+                            rows="1"
+                            class="w-full bg-transparent text-base focus:outline-none resize-none overflow-hidden"
+                            style="min-height: 24px; max-height: 120px;"
+                            onkeydown="handleChatKeydown(event)"
+                            oninput="autoResizeTextarea(this)"
+                        ></textarea>
+                    </form>
+
+                    <!-- Bottom toolbar -->
+                    <div class="flex items-center justify-between mt-3 pt-3 border-t border-gray-700">
+                        <div class="flex items-center gap-1">
+                            <span id="repo-badge" class="text-xs bg-gray-700 px-2 py-1 rounded-full text-gray-400">
+                                StreetsDigital/vibes
+                            </span>
+                        </div>
+                        <div class="flex items-center gap-1">
+                            <!-- Add task -->
+                            <button onclick="showAddTask()" class="p-2 hover:bg-gray-700 rounded-lg active:bg-gray-600" title="Add task">
+                                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+                                </svg>
+                            </button>
+                            <!-- Commit -->
+                            <button onclick="quickPrompt('/commit')" class="p-2 hover:bg-gray-700 rounded-lg active:bg-gray-600" title="Commit">
+                                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+                                </svg>
+                            </button>
+                            <!-- PR -->
+                            <button onclick="quickPrompt('Create a pull request')" class="p-2 hover:bg-gray-700 rounded-lg active:bg-gray-600" title="Create PR">
+                                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"/>
+                                </svg>
+                            </button>
+                            <!-- Send / Stop -->
+                            <button id="send-btn" onclick="submitOrStop()" class="p-2 bg-white text-gray-900 rounded-lg hover:bg-gray-200 active:bg-gray-300 ml-1" title="Send">
+                                <svg id="send-icon" class="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                                    <path d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z"/>
+                                </svg>
+                                <svg id="stop-icon" class="w-5 h-5 hidden" fill="currentColor" viewBox="0 0 20 20">
+                                    <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8 7a1 1 0 00-1 1v4a1 1 0 001 1h4a1 1 0 001-1V8a1 1 0 00-1-1H8z" clip-rule="evenodd"/>
+                                </svg>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Tools Panel -->
+        <aside id="view-tools" class="hidden w-full md:w-96 bg-gray-900 md:bg-gray-800 md:border-l border-gray-700 flex-col h-full overflow-y-auto">
+            <div class="p-4 border-b border-gray-700 flex-shrink-0">
+                <h2 class="font-semibold text-gray-300">Claude Tools</h2>
+                <p class="text-xs text-gray-500">MCP servers, skills, and settings</p>
+            </div>
+
+            <!-- MCP Servers Section -->
+            <div class="p-4 border-b border-gray-700">
+                <div class="flex items-center justify-between mb-3">
+                    <h3 class="text-sm font-medium text-gray-400">MCP Servers</h3>
+                    <button onclick="showAddMcpModal()" class="text-xs px-2 py-1 bg-gray-700 rounded hover:bg-gray-600">+ Add</button>
+                </div>
+                <div id="mcp-servers-list" class="space-y-2">
+                    <!-- Populated by JS -->
+                </div>
+            </div>
+
+            <!-- Skills Section -->
+            <div class="p-4 border-b border-gray-700">
+                <div class="flex items-center justify-between mb-3">
+                    <h3 class="text-sm font-medium text-gray-400">Skills</h3>
+                    <button onclick="showAddSkillModal()" class="text-xs px-2 py-1 bg-gray-700 rounded hover:bg-gray-600">+ Add</button>
+                </div>
+                <div id="skills-list" class="space-y-2">
+                    <!-- Populated by JS -->
+                </div>
+            </div>
+
+            <!-- Built-in Tools Section -->
+            <div class="p-4 border-b border-gray-700">
+                <div class="flex items-center justify-between mb-3">
+                    <h3 class="text-sm font-medium text-gray-400">Built-in Tools</h3>
+                </div>
+                <div id="tools-list" class="space-y-2">
+                    <!-- Populated by JS -->
+                </div>
+            </div>
+
+            <!-- Hooks Section -->
+            <div class="p-4 border-b border-gray-700">
+                <div class="flex items-center justify-between mb-3">
+                    <h3 class="text-sm font-medium text-gray-400">Hooks</h3>
+                    <button onclick="showAddHookModal()" class="text-xs px-2 py-1 bg-gray-700 rounded hover:bg-gray-600">+ Add</button>
+                </div>
+                <div id="hooks-list" class="space-y-2">
+                    <!-- Populated by JS -->
+                </div>
+            </div>
+
+            <!-- Quick Actions -->
+            <div class="p-4">
+                <h3 class="text-sm font-medium text-gray-400 mb-3">Quick Actions</h3>
+                <div class="space-y-2">
+                    <button onclick="quickPrompt('/commit')" class="w-full text-left px-3 py-2 bg-gray-800 rounded-lg hover:bg-gray-700 text-sm">
+                        Commit changes
                     </button>
-                </form>
-                <div class="mt-2 flex gap-2">
-                    <button onclick="quickPrompt('Summarize current tasks')" class="text-xs px-2 py-1 bg-gray-700 rounded hover:bg-gray-600">
-                        Summarize
+                    <button onclick="quickPrompt('Create a pull request')" class="w-full text-left px-3 py-2 bg-gray-800 rounded-lg hover:bg-gray-700 text-sm">
+                        Create PR
                     </button>
-                    <button onclick="quickPrompt('What should I work on next?')" class="text-xs px-2 py-1 bg-gray-700 rounded hover:bg-gray-600">
-                        Next task
+                    <button onclick="quickPrompt('/verify')" class="w-full text-left px-3 py-2 bg-gray-800 rounded-lg hover:bg-gray-700 text-sm">
+                        Run quality checks
                     </button>
-                    <button onclick="quickPrompt('Run quality checks')" class="text-xs px-2 py-1 bg-gray-700 rounded hover:bg-gray-600">
-                        Quality
+                    <button onclick="quickPrompt('/retrospective')" class="w-full text-left px-3 py-2 bg-gray-800 rounded-lg hover:bg-gray-700 text-sm">
+                        Extract learnings
                     </button>
                 </div>
             </div>
         </aside>
     </div>
 
+    <!-- Add MCP Server Modal -->
+    <div id="add-mcp-modal" class="fixed inset-0 bg-black/50 hidden items-center justify-center z-50 p-4">
+        <div class="bg-gray-800 rounded-xl p-5 w-full max-w-md">
+            <h3 class="text-lg font-semibold mb-4">Add MCP Server</h3>
+            <form onsubmit="addMcpServer(event)">
+                <div class="space-y-4">
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-1">Name</label>
+                        <input type="text" id="mcp-name" required placeholder="my-server" class="w-full bg-gray-700 rounded-lg px-3 py-3 text-base focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    </div>
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-1">Command</label>
+                        <input type="text" id="mcp-command" required placeholder="npx" class="w-full bg-gray-700 rounded-lg px-3 py-3 text-base focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    </div>
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-1">Arguments (space separated)</label>
+                        <input type="text" id="mcp-args" placeholder="-y @modelcontextprotocol/server-github" class="w-full bg-gray-700 rounded-lg px-3 py-3 text-base focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    </div>
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-1">Scope</label>
+                        <select id="mcp-scope" class="w-full bg-gray-700 rounded-lg px-3 py-3 text-base focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            <option value="project">Project</option>
+                            <option value="global">Global</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="flex gap-2 mt-6">
+                    <button type="button" onclick="hideAddMcpModal()" class="flex-1 px-4 py-3 bg-gray-700 rounded-lg hover:bg-gray-600">Cancel</button>
+                    <button type="submit" class="flex-1 px-4 py-3 bg-blue-600 rounded-lg hover:bg-blue-500">Add</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Add Skill Modal -->
+    <div id="add-skill-modal" class="fixed inset-0 bg-black/50 hidden items-center justify-center z-50 p-4">
+        <div class="bg-gray-800 rounded-xl p-5 w-full max-w-md max-h-[90vh] overflow-y-auto">
+            <h3 class="text-lg font-semibold mb-4">Create Skill</h3>
+            <form onsubmit="addSkill(event)">
+                <div class="space-y-4">
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-1">Name</label>
+                        <input type="text" id="skill-name" required placeholder="fix-common-error" class="w-full bg-gray-700 rounded-lg px-3 py-3 text-base focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    </div>
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-1">Description</label>
+                        <input type="text" id="skill-description" placeholder="What this skill does" class="w-full bg-gray-700 rounded-lg px-3 py-3 text-base focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    </div>
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-1">Trigger (when to use)</label>
+                        <textarea id="skill-trigger" rows="2" placeholder="When error X occurs..." class="w-full bg-gray-700 rounded-lg px-3 py-3 text-base focus:outline-none focus:ring-2 focus:ring-blue-500"></textarea>
+                    </div>
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-1">Solution</label>
+                        <textarea id="skill-solution" rows="4" placeholder="Steps to fix..." class="w-full bg-gray-700 rounded-lg px-3 py-3 text-base focus:outline-none focus:ring-2 focus:ring-blue-500"></textarea>
+                    </div>
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-1">Scope</label>
+                        <select id="skill-scope" class="w-full bg-gray-700 rounded-lg px-3 py-3 text-base focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            <option value="project">Project</option>
+                            <option value="global">Global</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="flex gap-2 mt-6">
+                    <button type="button" onclick="hideAddSkillModal()" class="flex-1 px-4 py-3 bg-gray-700 rounded-lg hover:bg-gray-600">Cancel</button>
+                    <button type="submit" class="flex-1 px-4 py-3 bg-blue-600 rounded-lg hover:bg-blue-500">Create</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Add Hook Modal -->
+    <div id="add-hook-modal" class="fixed inset-0 bg-black/50 hidden items-center justify-center z-50 p-4">
+        <div class="bg-gray-800 rounded-xl p-5 w-full max-w-md">
+            <h3 class="text-lg font-semibold mb-4">Add Hook</h3>
+            <form onsubmit="addHook(event)">
+                <div class="space-y-4">
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-1">Event</label>
+                        <select id="hook-event" class="w-full bg-gray-700 rounded-lg px-3 py-3 text-base focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            <option value="PreToolUse">PreToolUse - Before tool runs</option>
+                            <option value="PostToolUse">PostToolUse - After tool runs</option>
+                            <option value="Notification">Notification - On notifications</option>
+                            <option value="Stop">Stop - When Claude stops</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-1">Command</label>
+                        <input type="text" id="hook-command" required placeholder="npm run lint" class="w-full bg-gray-700 rounded-lg px-3 py-3 text-base focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    </div>
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-1">Scope</label>
+                        <select id="hook-scope" class="w-full bg-gray-700 rounded-lg px-3 py-3 text-base focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            <option value="project">Project</option>
+                            <option value="global">Global</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="flex gap-2 mt-6">
+                    <button type="button" onclick="hideAddHookModal()" class="flex-1 px-4 py-3 bg-gray-700 rounded-lg hover:bg-gray-600">Cancel</button>
+                    <button type="submit" class="flex-1 px-4 py-3 bg-blue-600 rounded-lg hover:bg-blue-500">Add</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- View/Edit MCP Modal -->
+    <div id="view-mcp-modal" class="fixed inset-0 bg-black/50 hidden items-center justify-center z-50 p-4">
+        <div class="bg-gray-800 rounded-xl p-5 w-full max-w-md">
+            <div class="flex justify-between items-start mb-4">
+                <h3 class="text-lg font-semibold">MCP Server</h3>
+                <button onclick="hideViewMcpModal()" class="text-gray-500 hover:text-gray-300 p-1 -mr-1">✕</button>
+            </div>
+            <form onsubmit="updateMcpServer(event)">
+                <input type="hidden" id="view-mcp-original-name">
+                <input type="hidden" id="view-mcp-scope">
+                <div class="space-y-4">
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-1">Name</label>
+                        <input type="text" id="view-mcp-name" required class="w-full bg-gray-700 rounded-lg px-3 py-3 text-base focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    </div>
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-1">Command</label>
+                        <input type="text" id="view-mcp-command" required class="w-full bg-gray-700 rounded-lg px-3 py-3 text-base focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    </div>
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-1">Arguments</label>
+                        <input type="text" id="view-mcp-args" class="w-full bg-gray-700 rounded-lg px-3 py-3 text-base focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    </div>
+                    <div class="flex items-center justify-between">
+                        <span class="text-sm text-gray-400">Enabled</span>
+                        <label class="relative inline-flex items-center cursor-pointer">
+                            <input type="checkbox" id="view-mcp-enabled" class="sr-only peer">
+                            <div class="w-11 h-6 bg-gray-600 peer-focus:ring-2 peer-focus:ring-blue-500 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                        </label>
+                    </div>
+                    <div class="text-xs text-gray-500">
+                        Scope: <span id="view-mcp-scope-display" class="text-gray-400"></span>
+                    </div>
+                </div>
+                <div class="flex gap-2 mt-6">
+                    <button type="button" onclick="deleteMcpFromModal()" class="px-4 py-3 bg-red-600/20 text-red-400 rounded-lg hover:bg-red-600/30">Delete</button>
+                    <button type="button" onclick="hideViewMcpModal()" class="flex-1 px-4 py-3 bg-gray-700 rounded-lg hover:bg-gray-600">Cancel</button>
+                    <button type="submit" class="flex-1 px-4 py-3 bg-blue-600 rounded-lg hover:bg-blue-500">Save</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- View/Edit Hook Modal -->
+    <div id="view-hook-modal" class="fixed inset-0 bg-black/50 hidden items-center justify-center z-50 p-4">
+        <div class="bg-gray-800 rounded-xl p-5 w-full max-w-md">
+            <div class="flex justify-between items-start mb-4">
+                <h3 class="text-lg font-semibold">Hook</h3>
+                <button onclick="hideViewHookModal()" class="text-gray-500 hover:text-gray-300 p-1 -mr-1">✕</button>
+            </div>
+            <form onsubmit="updateHook(event)">
+                <input type="hidden" id="view-hook-old-event">
+                <input type="hidden" id="view-hook-old-command">
+                <input type="hidden" id="view-hook-old-scope">
+                <div class="space-y-4">
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-1">Event</label>
+                        <select id="view-hook-event" class="w-full bg-gray-700 rounded-lg px-3 py-3 text-base focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            <option value="PreToolUse">PreToolUse - Before tool runs</option>
+                            <option value="PostToolUse">PostToolUse - After tool runs</option>
+                            <option value="Notification">Notification - On notifications</option>
+                            <option value="Stop">Stop - When Claude stops</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-1">Command</label>
+                        <input type="text" id="view-hook-command" required class="w-full bg-gray-700 rounded-lg px-3 py-3 text-base focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    </div>
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-1">Scope</label>
+                        <select id="view-hook-scope" class="w-full bg-gray-700 rounded-lg px-3 py-3 text-base focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            <option value="project">Project</option>
+                            <option value="global">Global</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="flex gap-2 mt-6">
+                    <button type="button" onclick="deleteHookFromModal()" class="px-4 py-3 bg-red-600/20 text-red-400 rounded-lg hover:bg-red-600/30">Delete</button>
+                    <button type="button" onclick="hideViewHookModal()" class="flex-1 px-4 py-3 bg-gray-700 rounded-lg hover:bg-gray-600">Cancel</button>
+                    <button type="submit" class="flex-1 px-4 py-3 bg-blue-600 rounded-lg hover:bg-blue-500">Save</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- View Tool Modal -->
+    <div id="view-tool-modal" class="fixed inset-0 bg-black/50 hidden items-center justify-center z-50 p-4">
+        <div class="bg-gray-800 rounded-xl p-5 w-full max-w-md">
+            <div class="flex justify-between items-start mb-4">
+                <h3 id="view-tool-name" class="text-lg font-semibold"></h3>
+                <button onclick="hideViewToolModal()" class="text-gray-500 hover:text-gray-300 p-1 -mr-1">✕</button>
+            </div>
+            <div class="space-y-4">
+                <div>
+                    <label class="block text-sm text-gray-400 mb-1">Description</label>
+                    <p id="view-tool-description" class="text-sm"></p>
+                </div>
+                <div>
+                    <label class="block text-sm text-gray-400 mb-1">Details</label>
+                    <p id="view-tool-details" class="text-sm text-gray-300"></p>
+                </div>
+                <div class="flex items-center justify-between p-3 bg-gray-700 rounded-lg">
+                    <span class="text-sm">Enabled</span>
+                    <label class="relative inline-flex items-center cursor-pointer">
+                        <input type="checkbox" id="view-tool-enabled" onchange="toggleToolFromModal()" class="sr-only peer">
+                        <div class="w-11 h-6 bg-gray-600 peer-focus:ring-2 peer-focus:ring-blue-500 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                    </label>
+                </div>
+                <div id="view-tool-denied-info" class="text-xs text-yellow-400 hidden"></div>
+            </div>
+            <div class="flex gap-2 mt-6">
+                <button type="button" onclick="hideViewToolModal()" class="flex-1 px-4 py-3 bg-gray-700 rounded-lg hover:bg-gray-600">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- View/Edit Skill Modal -->
+    <div id="view-skill-modal" class="fixed inset-0 bg-black/50 hidden items-center justify-center z-50 p-4">
+        <div class="bg-gray-800 rounded-xl p-5 w-full max-w-md max-h-[90vh] overflow-y-auto">
+            <div class="flex justify-between items-start mb-4">
+                <h3 id="view-skill-name" class="text-lg font-semibold"></h3>
+                <button onclick="hideViewSkillModal()" class="text-gray-500 hover:text-gray-300 p-1 -mr-1">✕</button>
+            </div>
+            <form onsubmit="updateSkill(event)">
+                <input type="hidden" id="view-skill-path">
+                <div class="space-y-4">
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-1">Content</label>
+                        <textarea id="view-skill-content" rows="12" class="w-full bg-gray-700 rounded-lg px-3 py-3 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500"></textarea>
+                    </div>
+                    <div class="text-xs text-gray-500">
+                        Path: <span id="view-skill-path-display" class="text-gray-400"></span>
+                    </div>
+                </div>
+                <div class="flex gap-2 mt-6">
+                    <button type="button" onclick="deleteSkillFromModal()" class="px-4 py-3 bg-red-600/20 text-red-400 rounded-lg hover:bg-red-600/30">Delete</button>
+                    <button type="button" onclick="hideViewSkillModal()" class="flex-1 px-4 py-3 bg-gray-700 rounded-lg hover:bg-gray-600">Cancel</button>
+                    <button type="submit" class="flex-1 px-4 py-3 bg-blue-600 rounded-lg hover:bg-blue-500">Save</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Action Menu Modal -->
+    <div id="action-menu" class="fixed inset-0 bg-black/50 hidden items-end justify-center z-50" onclick="hideActionMenu()">
+        <div class="bg-gray-800 rounded-t-2xl w-full max-w-lg p-4 safe-bottom" onclick="event.stopPropagation()">
+            <div class="w-12 h-1 bg-gray-600 rounded-full mx-auto mb-4"></div>
+            <div class="space-y-1">
+                <button onclick="quickPrompt('Summarize current tasks'); hideActionMenu()" class="w-full text-left px-4 py-3 hover:bg-gray-700 rounded-lg active:bg-gray-600">
+                    Summarize tasks
+                </button>
+                <button onclick="quickPrompt('What should I work on next?'); hideActionMenu()" class="w-full text-left px-4 py-3 hover:bg-gray-700 rounded-lg active:bg-gray-600">
+                    Suggest next task
+                </button>
+                <button onclick="quickPrompt('/verify'); hideActionMenu()" class="w-full text-left px-4 py-3 hover:bg-gray-700 rounded-lg active:bg-gray-600">
+                    Run quality checks
+                </button>
+                <button onclick="quickPrompt('Show git status'); hideActionMenu()" class="w-full text-left px-4 py-3 hover:bg-gray-700 rounded-lg active:bg-gray-600">
+                    Git status
+                </button>
+                <button onclick="clearChat(); hideActionMenu()" class="w-full text-left px-4 py-3 hover:bg-gray-700 rounded-lg active:bg-gray-600 text-red-400">
+                    Clear chat history
+                </button>
+                <button onclick="hideActionMenu()" class="w-full text-left px-4 py-3 text-gray-400 hover:bg-gray-700 rounded-lg">
+                    Cancel
+                </button>
+            </div>
+        </div>
+    </div>
+
     <!-- Add Task Modal -->
-    <div id="add-task-modal" class="fixed inset-0 bg-black/50 hidden items-center justify-center">
-        <div class="bg-gray-800 rounded-lg p-6 w-full max-w-md">
+    <div id="add-task-modal" class="fixed inset-0 bg-black/50 hidden items-center justify-center z-50 p-4">
+        <div class="bg-gray-800 rounded-xl p-5 w-full max-w-md max-h-[90vh] overflow-y-auto">
             <h3 class="text-lg font-semibold mb-4">Add New Task</h3>
             <form onsubmit="addTask(event)">
                 <div class="space-y-4">
                     <div>
                         <label class="block text-sm text-gray-400 mb-1">Name</label>
-                        <input type="text" id="task-name" required class="w-full bg-gray-700 rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                        <input type="text" id="task-name" required class="w-full bg-gray-700 rounded-lg px-3 py-3 text-base focus:outline-none focus:ring-2 focus:ring-blue-500">
                     </div>
                     <div>
                         <label class="block text-sm text-gray-400 mb-1">Description</label>
-                        <textarea id="task-desc" rows="3" class="w-full bg-gray-700 rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"></textarea>
+                        <textarea id="task-desc" rows="3" class="w-full bg-gray-700 rounded-lg px-3 py-3 text-base focus:outline-none focus:ring-2 focus:ring-blue-500"></textarea>
                     </div>
                     <div>
                         <label class="block text-sm text-gray-400 mb-1">Test Cases (one per line)</label>
-                        <textarea id="task-tests" rows="3" placeholder="Test case 1&#10;Test case 2" class="w-full bg-gray-700 rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"></textarea>
-                    </div>
-                    <div>
-                        <label class="block text-sm text-gray-400 mb-1">Priority</label>
-                        <input type="number" id="task-priority" value="0" class="w-full bg-gray-700 rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                        <textarea id="task-tests" rows="3" placeholder="Test case 1&#10;Test case 2" class="w-full bg-gray-700 rounded-lg px-3 py-3 text-base focus:outline-none focus:ring-2 focus:ring-blue-500"></textarea>
                     </div>
                 </div>
-                <div class="flex justify-end gap-2 mt-6">
-                    <button type="button" onclick="hideAddTask()" class="px-4 py-2 bg-gray-700 rounded hover:bg-gray-600">Cancel</button>
-                    <button type="submit" class="px-4 py-2 bg-blue-600 rounded hover:bg-blue-500">Add Task</button>
+                <div class="flex gap-2 mt-6">
+                    <button type="button" onclick="hideAddTask()" class="flex-1 px-4 py-3 bg-gray-700 rounded-lg hover:bg-gray-600 active:bg-gray-500">Cancel</button>
+                    <button type="submit" class="flex-1 px-4 py-3 bg-blue-600 rounded-lg hover:bg-blue-500 active:bg-blue-700">Add</button>
                 </div>
             </form>
         </div>
     </div>
 
     <!-- Task Detail Modal -->
-    <div id="task-detail-modal" class="fixed inset-0 bg-black/50 hidden items-center justify-center">
-        <div class="bg-gray-800 rounded-lg p-6 w-full max-w-lg">
+    <div id="task-detail-modal" class="fixed inset-0 bg-black/50 hidden items-center justify-center z-50 p-4">
+        <div class="bg-gray-800 rounded-xl p-5 w-full max-w-lg max-h-[90vh] overflow-y-auto">
             <div class="flex justify-between items-start mb-4">
-                <h3 id="detail-name" class="text-lg font-semibold"></h3>
-                <button onclick="hideTaskDetail()" class="text-gray-500 hover:text-gray-300">✕</button>
+                <h3 id="detail-name" class="text-lg font-semibold pr-4"></h3>
+                <button onclick="hideTaskDetail()" class="text-gray-500 hover:text-gray-300 p-1 -mr-1">✕</button>
             </div>
             <div id="detail-content" class="space-y-4">
             </div>
-            <div class="flex justify-end gap-2 mt-6">
-                <button onclick="workOnTask()" class="px-4 py-2 bg-blue-600 rounded hover:bg-blue-500">
+            <div class="flex gap-2 mt-6">
+                <button onclick="hideTaskDetail()" class="flex-1 px-4 py-3 bg-gray-700 rounded-lg hover:bg-gray-600 active:bg-gray-500">
+                    Close
+                </button>
+                <button onclick="workOnTask()" class="flex-1 px-4 py-3 bg-blue-600 rounded-lg hover:bg-blue-500 active:bg-blue-700">
                     Work on this
                 </button>
             </div>
@@ -178,13 +633,90 @@
     <script>
         const API_BASE = '/api';
         let currentTask = null;
+        let currentView = 'board';
+        let isLoading = false;
 
         // Initialize
         document.addEventListener('DOMContentLoaded', () => {
             refreshBoard();
-            // Poll for updates every 10 seconds
+            fetchBranchName();
+            loadChatHistory();
+            loadProjects();
+            checkSession();
             setInterval(refreshBoard, 10000);
+
+            // Close dropdown when clicking outside
+            document.addEventListener('click', (e) => {
+                if (!e.target.closest('#project-btn') && !e.target.closest('#project-dropdown')) {
+                    document.getElementById('project-dropdown').classList.add('hidden');
+                }
+            });
         });
+
+        // Fetch current branch
+        async function fetchBranchName() {
+            try {
+                const response = await fetch(`${API_BASE}/git/branch`);
+                const data = await response.json();
+                if (data.branch) {
+                    document.getElementById('branch-name').textContent = data.branch;
+                }
+            } catch (error) {
+                // Keep default
+            }
+        }
+
+        // Action menu
+        function showActionMenu() {
+            document.getElementById('action-menu').classList.remove('hidden');
+            document.getElementById('action-menu').classList.add('flex');
+        }
+
+        function hideActionMenu() {
+            document.getElementById('action-menu').classList.add('hidden');
+            document.getElementById('action-menu').classList.remove('flex');
+        }
+
+        // View switching for mobile
+        function showView(view) {
+            currentView = view;
+            const views = ['board', 'chat', 'tools'];
+            const viewElements = {
+                board: document.getElementById('view-board'),
+                chat: document.getElementById('view-chat'),
+                tools: document.getElementById('view-tools')
+            };
+            const tabElements = {
+                board: document.getElementById('tab-board'),
+                chat: document.getElementById('tab-chat'),
+                tools: document.getElementById('tab-tools')
+            };
+
+            views.forEach(v => {
+                const viewEl = viewElements[v];
+                const tabEl = tabElements[v];
+
+                if (v === view) {
+                    viewEl?.classList.remove('hidden');
+                    viewEl?.classList.add('flex');
+                    tabEl?.classList.add('tab-active', 'text-blue-400');
+                    tabEl?.classList.remove('text-gray-400');
+                } else {
+                    viewEl?.classList.add('hidden');
+                    viewEl?.classList.remove('flex');
+                    tabEl?.classList.remove('tab-active', 'text-blue-400');
+                    tabEl?.classList.add('text-gray-400');
+                }
+            });
+
+            // Load tools data when switching to tools view
+            if (view === 'tools') {
+                loadMcpServers();
+                loadSkills();
+                loadBuiltinTools();
+                loadHooks();
+            }
+        }
 
         // Fetch and render board
         async function refreshBoard() {
@@ -205,12 +737,10 @@
                 'passing': 'passing'
             };
 
-            // Clear columns
             Object.values(columns).forEach(id => {
                 document.getElementById(id).innerHTML = '';
             });
 
-            // Render tasks
             if (data.board) {
                 Object.entries(data.board).forEach(([status, tasks]) => {
                     const columnId = columns[status] || status;
@@ -223,13 +753,11 @@
                 });
             }
 
-            // Update counts
             document.getElementById('todo-count').textContent = data.board?.todo?.length || 0;
             document.getElementById('progress-count').textContent = data.board?.in_progress?.length || 0;
             document.getElementById('review-count').textContent = data.board?.review?.length || 0;
             document.getElementById('done-count').textContent = data.board?.done?.length || 0;
 
-            // Update stats
             if (data.stats) {
                 document.getElementById('stats').textContent =
                     `${data.stats.passing}/${data.stats.total} complete (${data.stats.progress_percent}%)`;
@@ -238,7 +766,7 @@
 
         function createTaskCard(task) {
             const card = document.createElement('div');
-            card.className = 'bg-gray-700 rounded-lg p-3 cursor-pointer hover:bg-gray-600 transition-colors';
+            card.className = 'bg-gray-700 rounded-lg p-3 cursor-pointer hover:bg-gray-600 active:bg-gray-500 transition-colors touch-manipulation';
             card.draggable = true;
             card.dataset.id = task.id;
             card.ondragstart = (e) => drag(e, task.id);
@@ -254,7 +782,7 @@
                     ${priorityBadge}
                 </div>
                 ${task.description ? `<p class="text-xs text-gray-400 mt-1 line-clamp-2">${task.description}</p>` : ''}
-                ${task.test_cases?.length ? `<div class="text-xs text-gray-500 mt-2">${task.test_cases.length} test cases</div>` : ''}
+                ${task.test_cases?.length ? `<div class="text-xs text-gray-500 mt-2">${task.test_cases.length} tests</div>` : ''}
             `;
 
             return card;
@@ -308,7 +836,7 @@
                 name: document.getElementById('task-name').value,
                 description: document.getElementById('task-desc').value,
                 test_cases: document.getElementById('task-tests').value.split('\n').filter(t => t.trim()),
-                priority: parseInt(document.getElementById('task-priority').value) || 0
+                priority: 0
             };
 
             try {
@@ -319,11 +847,9 @@
                 });
                 hideAddTask();
                 refreshBoard();
-                // Clear form
                 document.getElementById('task-name').value = '';
                 document.getElementById('task-desc').value = '';
                 document.getElementById('task-tests').value = '';
-                document.getElementById('task-priority').value = '0';
             } catch (error) {
                 console.error('Failed to add task:', error);
             }
@@ -351,10 +877,6 @@
                     </ul>
                 </div>
                 ` : ''}
-                <div>
-                    <label class="text-xs text-gray-500">Priority</label>
-                    <p class="text-sm">${task.priority}</p>
-                </div>
             `;
             document.getElementById('task-detail-modal').classList.remove('hidden');
             document.getElementById('task-detail-modal').classList.add('flex');
@@ -368,23 +890,49 @@
 
         function workOnTask() {
             if (currentTask) {
+                showView('chat');
                 quickPrompt(`Help me implement: ${currentTask.name}\n\nDescription: ${currentTask.description || 'None'}\n\nTest cases:\n${currentTask.test_cases?.join('\n') || 'None'}`);
                 hideTaskDetail();
             }
         }
 
         // Chat functions
+        function setLoading(loading) {
+            isLoading = loading;
+            const sendIcon = document.getElementById('send-icon');
+            const stopIcon = document.getElementById('stop-icon');
+            if (loading) {
+                sendIcon.classList.add('hidden');
+                stopIcon.classList.remove('hidden');
+            } else {
+                sendIcon.classList.remove('hidden');
+                stopIcon.classList.add('hidden');
+            }
+        }
+
+        function submitOrStop() {
+            if (isLoading) {
+                // Could implement abort controller here
+                setLoading(false);
+            } else {
+                document.getElementById('chat-form').dispatchEvent(new Event('submit'));
+            }
+        }
+
         async function sendMessage(event) {
             event.preventDefault();
             const input = document.getElementById('chat-input');
             const message = input.value.trim();
-            if (!message) return;
+            if (!message || isLoading) return;
 
-            // Add user message
             addChatMessage(message, 'user');
             input.value = '';
+            autoResizeTextarea(input);
+            setLoading(true);
 
-            // Send to API
+            // Add loading indicator
+            const loadingId = addLoadingMessage();
+
             try {
                 const response = await fetch(`${API_BASE}/chat`, {
                     method: 'POST',
@@ -392,10 +940,36 @@
                     body: JSON.stringify({ message })
                 });
                 const data = await response.json();
+                removeLoadingMessage(loadingId);
                 addChatMessage(data.response, 'assistant');
             } catch (error) {
+                removeLoadingMessage(loadingId);
                 addChatMessage('Error: Could not reach Claude', 'error');
+            } finally {
+                setLoading(false);
             }
+        }
+
+        function addLoadingMessage() {
+            const container = document.getElementById('chat-messages');
+            const msg = document.createElement('div');
+            msg.id = 'loading-' + Date.now();
+            msg.className = 'bg-gray-700 rounded-lg p-3 mr-4 md:mr-8';
+            msg.innerHTML = `
+                <div class="flex gap-1">
+                    <span class="w-2 h-2 bg-gray-400 rounded-full loading-dot"></span>
+                    <span class="w-2 h-2 bg-gray-400 rounded-full loading-dot"></span>
+                    <span class="w-2 h-2 bg-gray-400 rounded-full loading-dot"></span>
+                </div>
+            `;
+            container.appendChild(msg);
+            container.scrollTop = container.scrollHeight;
+            return msg.id;
+        }
+
+        function removeLoadingMessage(id) {
+            const msg = document.getElementById(id);
+            if (msg) msg.remove();
         }
 
         function addChatMessage(text, role) {
@@ -405,18 +979,726 @@
 
             const msg = document.createElement('div');
             msg.className = role === 'user'
-                ? 'bg-blue-600 rounded-lg p-3 ml-8'
+                ? 'bg-blue-600 rounded-lg p-3 ml-4 md:ml-8'
                 : role === 'error'
                 ? 'bg-red-600/20 text-red-400 rounded-lg p-3'
-                : 'bg-gray-700 rounded-lg p-3 mr-8';
-            msg.innerHTML = `<p class="text-sm whitespace-pre-wrap">${text}</p>`;
+                : 'bg-gray-700 rounded-lg p-3 mr-4 md:mr-8';
+
+            const formatted = formatMessage(text);
+            msg.innerHTML = `<div class="text-sm chat-content">${formatted}</div>`;
             container.appendChild(msg);
             container.scrollTop = container.scrollHeight;
         }
 
+        function formatMessage(text) {
+            let escaped = text
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;');
+
+            escaped = escaped.replace(/```(\w*)\n?([\s\S]*?)```/g, (match, lang, code) => {
+                return `<pre class="bg-gray-900 rounded p-3 my-2 overflow-x-auto text-xs font-mono"><code>${code.trim()}</code></pre>`;
+            });
+
+            escaped = escaped.replace(/`([^`]+)`/g, '<code class="bg-gray-900 px-1.5 py-0.5 rounded text-xs font-mono">$1</code>');
+            escaped = escaped.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+            escaped = escaped.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+            escaped = escaped.replace(/\n/g, '<br>');
+
+            return escaped;
+        }
+
         function quickPrompt(text) {
-            document.getElementById('chat-input').value = text;
+            const input = document.getElementById('chat-input');
+            input.value = text;
+            autoResizeTextarea(input);
             document.getElementById('chat-form').dispatchEvent(new Event('submit'));
+        }
+
+        function handleChatKeydown(event) {
+            if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault();
+                document.getElementById('chat-form').dispatchEvent(new Event('submit'));
+            }
+        }
+
+        function autoResizeTextarea(el) {
+            el.style.height = 'auto';
+            el.style.height = Math.min(el.scrollHeight, 120) + 'px';
+        }
+
+        // Load chat history from server
+        async function loadChatHistory() {
+            try {
+                const response = await fetch(`${API_BASE}/chat/history`);
+                const data = await response.json();
+                if (data.messages && data.messages.length > 0) {
+                    const container = document.getElementById('chat-messages');
+                    const firstMessage = container.querySelector('.text-center');
+                    if (firstMessage) firstMessage.remove();
+
+                    data.messages.forEach(msg => {
+                        addChatMessage(msg.content, msg.role);
+                    });
+                }
+            } catch (error) {
+                console.error('Failed to load chat history:', error);
+            }
+        }
+
+        // Clear chat history
+        async function clearChat() {
+            if (confirm('Clear chat history?')) {
+                try {
+                    await fetch(`${API_BASE}/chat/history`, { method: 'DELETE' });
+                    document.getElementById('chat-messages').innerHTML = `
+                        <div class="text-gray-500 text-sm text-center py-8">
+                            Start a conversation with Claude
+                        </div>
+                    `;
+                } catch (error) {
+                    console.error('Failed to clear chat:', error);
+                }
+            }
+        }
+
+        // ===========================================
+        // Project Switching
+        // ===========================================
+
+        function toggleProjectDropdown() {
+            document.getElementById('project-dropdown').classList.toggle('hidden');
+        }
+
+        async function loadProjects() {
+            try {
+                const response = await fetch(`${API_BASE}/projects`);
+                const data = await response.json();
+
+                const list = document.getElementById('project-list');
+                list.innerHTML = '';
+
+                if (data.projects) {
+                    data.projects.forEach(project => {
+                        const btn = document.createElement('button');
+                        btn.className = `w-full text-left px-3 py-2 hover:bg-gray-700 text-sm ${project.current ? 'text-blue-400' : ''}`;
+                        btn.innerHTML = project.current
+                            ? `<span class="mr-1">●</span> ${project.name}`
+                            : project.name;
+                        btn.onclick = () => switchProject(project.path);
+                        list.appendChild(btn);
+
+                        if (project.current) {
+                            document.getElementById('current-project').textContent = project.name;
+                        }
+                    });
+                }
+            } catch (error) {
+                console.error('Failed to load projects:', error);
+            }
+        }
+
+        async function switchProject(path) {
+            try {
+                const response = await fetch(`${API_BASE}/projects/switch`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ path })
+                });
+                const data = await response.json();
+
+                if (data.success) {
+                    document.getElementById('current-project').textContent = data.project;
+                    document.getElementById('project-dropdown').classList.add('hidden');
+
+                    // Reload everything for new project
+                    refreshBoard();
+                    fetchBranchName();
+                    loadChatHistory();
+                    loadProjects();
+                }
+            } catch (error) {
+                console.error('Failed to switch project:', error);
+            }
+        }
+
+        // ===========================================
+        // Session Management
+        // ===========================================
+
+        async function checkSession() {
+            try {
+                const response = await fetch(`${API_BASE}/session/ping`, { method: 'POST' });
+                const data = await response.json();
+
+                if (data.summary) {
+                    // Show welcome back message in chat
+                    showView('chat');
+                    addChatMessage(data.summary, 'assistant');
+                }
+            } catch (error) {
+                console.error('Failed to check session:', error);
+            }
+        }
+
+        // ===========================================
+        // MCP & Skills Management
+        // ===========================================
+
+        async function loadMcpServers() {
+            try {
+                const response = await fetch(`${API_BASE}/claude/mcp`);
+                const data = await response.json();
+
+                const list = document.getElementById('mcp-servers-list');
+                list.innerHTML = '';
+
+                if (data.servers && data.servers.length > 0) {
+                    data.servers.forEach(server => {
+                        const div = document.createElement('div');
+                        div.className = 'flex items-center justify-between p-2 bg-gray-800 rounded-lg cursor-pointer hover:bg-gray-700';
+                        div.innerHTML = `
+                            <div class="flex-1 min-w-0" onclick="showViewMcpModal('${server.name}', '${server.scope}')">
+                                <div class="text-sm font-medium truncate">${server.name}</div>
+                                <div class="text-xs text-gray-500">${server.scope} • ${server.command}</div>
+                            </div>
+                            <label class="relative inline-flex items-center cursor-pointer ml-2" onclick="event.stopPropagation()">
+                                <input type="checkbox" ${server.enabled ? 'checked' : ''} onchange="toggleMcp('${server.name}', '${server.scope}', this.checked)" class="sr-only peer">
+                                <div class="w-9 h-5 bg-gray-600 peer-focus:ring-2 peer-focus:ring-blue-500 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-600"></div>
+                            </label>
+                        `;
+                        list.appendChild(div);
+                    });
+                } else {
+                    list.innerHTML = '<div class="text-sm text-gray-500">No MCP servers configured</div>';
+                }
+            } catch (error) {
+                console.error('Failed to load MCP servers:', error);
+            }
+        }
+
+        async function toggleMcp(name, scope, enabled) {
+            try {
+                await fetch(`${API_BASE}/claude/mcp/${name}/toggle`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ scope, enabled })
+                });
+            } catch (error) {
+                console.error('Failed to toggle MCP server:', error);
+            }
+        }
+
+        function showAddMcpModal() {
+            document.getElementById('add-mcp-modal').classList.remove('hidden');
+            document.getElementById('add-mcp-modal').classList.add('flex');
+        }
+
+        function hideAddMcpModal() {
+            document.getElementById('add-mcp-modal').classList.add('hidden');
+            document.getElementById('add-mcp-modal').classList.remove('flex');
+        }
+
+        async function addMcpServer(event) {
+            event.preventDefault();
+
+            const data = {
+                name: document.getElementById('mcp-name').value,
+                command: document.getElementById('mcp-command').value,
+                args: document.getElementById('mcp-args').value.split(' ').filter(a => a),
+                scope: document.getElementById('mcp-scope').value
+            };
+
+            try {
+                await fetch(`${API_BASE}/claude/mcp`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                });
+                hideAddMcpModal();
+                loadMcpServers();
+
+                // Clear form
+                document.getElementById('mcp-name').value = '';
+                document.getElementById('mcp-command').value = '';
+                document.getElementById('mcp-args').value = '';
+            } catch (error) {
+                console.error('Failed to add MCP server:', error);
+            }
+        }
+
+        async function loadSkills() {
+            try {
+                const response = await fetch(`${API_BASE}/claude/skills`);
+                const data = await response.json();
+
+                const list = document.getElementById('skills-list');
+                list.innerHTML = '';
+
+                if (data.skills && data.skills.length > 0) {
+                    data.skills.forEach(skill => {
+                        const div = document.createElement('div');
+                        div.className = 'p-2 bg-gray-800 rounded-lg cursor-pointer hover:bg-gray-700';
+                        div.onclick = () => showViewSkillModal(skill.file, skill.name);
+                        div.innerHTML = `
+                            <div class="text-sm font-medium">${skill.name}</div>
+                            <div class="text-xs text-gray-500">${skill.description || skill.scope}</div>
+                        `;
+                        list.appendChild(div);
+                    });
+                } else {
+                    list.innerHTML = '<div class="text-sm text-gray-500">No skills created yet</div>';
+                }
+            } catch (error) {
+                console.error('Failed to load skills:', error);
+            }
+        }
+
+        function showAddSkillModal() {
+            document.getElementById('add-skill-modal').classList.remove('hidden');
+            document.getElementById('add-skill-modal').classList.add('flex');
+        }
+
+        function hideAddSkillModal() {
+            document.getElementById('add-skill-modal').classList.add('hidden');
+            document.getElementById('add-skill-modal').classList.remove('flex');
+        }
+
+        async function addSkill(event) {
+            event.preventDefault();
+
+            const data = {
+                name: document.getElementById('skill-name').value,
+                description: document.getElementById('skill-description').value,
+                trigger: document.getElementById('skill-trigger').value,
+                solution: document.getElementById('skill-solution').value,
+                scope: document.getElementById('skill-scope').value
+            };
+
+            try {
+                await fetch(`${API_BASE}/claude/skills`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                });
+                hideAddSkillModal();
+                loadSkills();
+
+                // Clear form
+                document.getElementById('skill-name').value = '';
+                document.getElementById('skill-description').value = '';
+                document.getElementById('skill-trigger').value = '';
+                document.getElementById('skill-solution').value = '';
+            } catch (error) {
+                console.error('Failed to create skill:', error);
+            }
+        }
+
+        // ===========================================
+        // Built-in Tools Management
+        // ===========================================
+
+        async function loadBuiltinTools() {
+            try {
+                const response = await fetch(`${API_BASE}/claude/tools`);
+                const data = await response.json();
+
+                const list = document.getElementById('tools-list');
+                list.innerHTML = '';
+
+                if (data.tools && data.tools.length > 0) {
+                    data.tools.forEach(tool => {
+                        const div = document.createElement('div');
+                        div.className = 'flex items-center justify-between p-2 bg-gray-800 rounded-lg cursor-pointer hover:bg-gray-700';
+                        div.innerHTML = `
+                            <div class="flex-1 min-w-0" onclick="showViewToolModal('${tool.name}')">
+                                <div class="text-sm font-medium">${tool.name}</div>
+                                <div class="text-xs text-gray-500">${tool.description}</div>
+                            </div>
+                            <label class="relative inline-flex items-center cursor-pointer ml-2" onclick="event.stopPropagation()">
+                                <input type="checkbox" ${tool.enabled ? 'checked' : ''} onchange="toggleTool('${tool.name}', this.checked)" class="sr-only peer">
+                                <div class="w-9 h-5 bg-gray-600 peer-focus:ring-2 peer-focus:ring-blue-500 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-600"></div>
+                            </label>
+                        `;
+                        list.appendChild(div);
+                    });
+                }
+            } catch (error) {
+                console.error('Failed to load tools:', error);
+            }
+        }
+
+        async function toggleTool(name, enabled) {
+            try {
+                await fetch(`${API_BASE}/claude/tools/${name}/toggle`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ enabled, scope: 'project' })
+                });
+            } catch (error) {
+                console.error('Failed to toggle tool:', error);
+            }
+        }
+
+        // ===========================================
+        // Hooks Management
+        // ===========================================
+
+        async function loadHooks() {
+            try {
+                const response = await fetch(`${API_BASE}/claude/hooks`);
+                const data = await response.json();
+
+                const list = document.getElementById('hooks-list');
+                list.innerHTML = '';
+
+                if (data.hooks && data.hooks.length > 0) {
+                    data.hooks.forEach(hook => {
+                        const div = document.createElement('div');
+                        div.className = 'flex items-center justify-between p-2 bg-gray-800 rounded-lg cursor-pointer hover:bg-gray-700';
+                        div.innerHTML = `
+                            <div class="flex-1 min-w-0" onclick="showViewHookModal('${hook.event}', '${escapeHtml(hook.command)}', '${hook.scope}')">
+                                <div class="text-sm font-medium">${hook.event}</div>
+                                <div class="text-xs text-gray-500 truncate">${hook.scope} • ${escapeHtml(hook.command)}</div>
+                            </div>
+                            <button onclick="event.stopPropagation(); deleteHook('${hook.event}', '${escapeHtml(hook.command)}', '${hook.scope}')" class="ml-2 p-1 text-red-400 hover:text-red-300">
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                                </svg>
+                            </button>
+                        `;
+                        list.appendChild(div);
+                    });
+                } else {
+                    list.innerHTML = '<div class="text-sm text-gray-500">No hooks configured</div>';
+                }
+            } catch (error) {
+                console.error('Failed to load hooks:', error);
+            }
+        }
+
+        function escapeHtml(str) {
+            return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
+        }
+
+        function showAddHookModal() {
+            document.getElementById('add-hook-modal').classList.remove('hidden');
+            document.getElementById('add-hook-modal').classList.add('flex');
+        }
+
+        function hideAddHookModal() {
+            document.getElementById('add-hook-modal').classList.add('hidden');
+            document.getElementById('add-hook-modal').classList.remove('flex');
+        }
+
+        async function addHook(event) {
+            event.preventDefault();
+
+            const data = {
+                event: document.getElementById('hook-event').value,
+                command: document.getElementById('hook-command').value,
+                scope: document.getElementById('hook-scope').value
+            };
+
+            try {
+                await fetch(`${API_BASE}/claude/hooks`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                });
+                hideAddHookModal();
+                loadHooks();
+
+                document.getElementById('hook-command').value = '';
+            } catch (error) {
+                console.error('Failed to add hook:', error);
+            }
+        }
+
+        async function deleteHook(event, command, scope) {
+            if (confirm(`Delete hook "${event}"?`)) {
+                try {
+                    await fetch(`${API_BASE}/claude/hooks`, {
+                        method: 'DELETE',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ event, command, scope })
+                    });
+                    loadHooks();
+                } catch (error) {
+                    console.error('Failed to delete hook:', error);
+                }
+            }
+        }
+
+        // ===========================================
+        // View/Edit Modal Functions
+        // ===========================================
+
+        // --- MCP Modal ---
+        let currentMcpData = null;
+
+        async function showViewMcpModal(name, scope) {
+            try {
+                const response = await fetch(`${API_BASE}/claude/mcp/${name}?scope=${scope}`);
+                const data = await response.json();
+
+                if (data.error) {
+                    alert(data.error);
+                    return;
+                }
+
+                currentMcpData = data;
+                document.getElementById('view-mcp-original-name').value = name;
+                document.getElementById('view-mcp-scope').value = scope;
+                document.getElementById('view-mcp-name').value = name;
+                document.getElementById('view-mcp-command').value = data.command || '';
+                document.getElementById('view-mcp-args').value = (data.args || []).join(' ');
+                document.getElementById('view-mcp-enabled').checked = data.enabled;
+                document.getElementById('view-mcp-scope-display').textContent = scope;
+
+                document.getElementById('view-mcp-modal').classList.remove('hidden');
+                document.getElementById('view-mcp-modal').classList.add('flex');
+            } catch (error) {
+                console.error('Failed to load MCP server:', error);
+            }
+        }
+
+        function hideViewMcpModal() {
+            document.getElementById('view-mcp-modal').classList.add('hidden');
+            document.getElementById('view-mcp-modal').classList.remove('flex');
+            currentMcpData = null;
+        }
+
+        async function updateMcpServer(event) {
+            event.preventDefault();
+
+            const originalName = document.getElementById('view-mcp-original-name').value;
+            const scope = document.getElementById('view-mcp-scope').value;
+            const name = document.getElementById('view-mcp-name').value;
+            const command = document.getElementById('view-mcp-command').value;
+            const args = document.getElementById('view-mcp-args').value.split(' ').filter(a => a);
+            const enabled = document.getElementById('view-mcp-enabled').checked;
+
+            try {
+                // Update server config
+                await fetch(`${API_BASE}/claude/mcp/${originalName}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name, command, args, scope })
+                });
+
+                // Update enabled state if changed
+                if (currentMcpData && currentMcpData.enabled !== enabled) {
+                    await fetch(`${API_BASE}/claude/mcp/${name}/toggle`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ scope, enabled })
+                    });
+                }
+
+                hideViewMcpModal();
+                loadMcpServers();
+            } catch (error) {
+                console.error('Failed to update MCP server:', error);
+            }
+        }
+
+        async function deleteMcpFromModal() {
+            const name = document.getElementById('view-mcp-original-name').value;
+            const scope = document.getElementById('view-mcp-scope').value;
+
+            if (confirm(`Delete MCP server "${name}"?`)) {
+                try {
+                    await fetch(`${API_BASE}/claude/mcp/${name}`, {
+                        method: 'DELETE',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ scope })
+                    });
+                    hideViewMcpModal();
+                    loadMcpServers();
+                } catch (error) {
+                    console.error('Failed to delete MCP server:', error);
+                }
+            }
+        }
+
+        // --- Hook Modal ---
+        function showViewHookModal(event, command, scope) {
+            document.getElementById('view-hook-old-event').value = event;
+            document.getElementById('view-hook-old-command').value = command;
+            document.getElementById('view-hook-old-scope').value = scope;
+            document.getElementById('view-hook-event').value = event;
+            document.getElementById('view-hook-command').value = command;
+            document.getElementById('view-hook-scope').value = scope;
+
+            document.getElementById('view-hook-modal').classList.remove('hidden');
+            document.getElementById('view-hook-modal').classList.add('flex');
+        }
+
+        function hideViewHookModal() {
+            document.getElementById('view-hook-modal').classList.add('hidden');
+            document.getElementById('view-hook-modal').classList.remove('flex');
+        }
+
+        async function updateHook(event) {
+            event.preventDefault();
+
+            const oldEvent = document.getElementById('view-hook-old-event').value;
+            const oldCommand = document.getElementById('view-hook-old-command').value;
+            const oldScope = document.getElementById('view-hook-old-scope').value;
+            const newEvent = document.getElementById('view-hook-event').value;
+            const newCommand = document.getElementById('view-hook-command').value;
+            const newScope = document.getElementById('view-hook-scope').value;
+
+            try {
+                await fetch(`${API_BASE}/claude/hooks`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        old_event: oldEvent,
+                        old_command: oldCommand,
+                        old_scope: oldScope,
+                        event: newEvent,
+                        command: newCommand,
+                        scope: newScope
+                    })
+                });
+                hideViewHookModal();
+                loadHooks();
+            } catch (error) {
+                console.error('Failed to update hook:', error);
+            }
+        }
+
+        async function deleteHookFromModal() {
+            const event = document.getElementById('view-hook-old-event').value;
+            const command = document.getElementById('view-hook-old-command').value;
+            const scope = document.getElementById('view-hook-old-scope').value;
+
+            if (confirm(`Delete hook "${event}"?`)) {
+                try {
+                    await fetch(`${API_BASE}/claude/hooks`, {
+                        method: 'DELETE',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ event, command, scope })
+                    });
+                    hideViewHookModal();
+                    loadHooks();
+                } catch (error) {
+                    console.error('Failed to delete hook:', error);
+                }
+            }
+        }
+
+        // --- Tool Modal ---
+        let currentToolName = null;
+
+        async function showViewToolModal(name) {
+            try {
+                const response = await fetch(`${API_BASE}/claude/tools/${name}`);
+                const data = await response.json();
+
+                if (data.error) {
+                    alert(data.error);
+                    return;
+                }
+
+                currentToolName = name;
+                document.getElementById('view-tool-name').textContent = data.name;
+                document.getElementById('view-tool-description').textContent = data.description;
+                document.getElementById('view-tool-details').textContent = data.details || 'No additional details available.';
+                document.getElementById('view-tool-enabled').checked = data.enabled;
+
+                const deniedInfo = document.getElementById('view-tool-denied-info');
+                if (data.denied_in) {
+                    deniedInfo.textContent = `Disabled in ${data.denied_in} settings`;
+                    deniedInfo.classList.remove('hidden');
+                } else {
+                    deniedInfo.classList.add('hidden');
+                }
+
+                document.getElementById('view-tool-modal').classList.remove('hidden');
+                document.getElementById('view-tool-modal').classList.add('flex');
+            } catch (error) {
+                console.error('Failed to load tool details:', error);
+            }
+        }
+
+        function hideViewToolModal() {
+            document.getElementById('view-tool-modal').classList.add('hidden');
+            document.getElementById('view-tool-modal').classList.remove('flex');
+            currentToolName = null;
+        }
+
+        async function toggleToolFromModal() {
+            if (!currentToolName) return;
+            const enabled = document.getElementById('view-tool-enabled').checked;
+            await toggleTool(currentToolName, enabled);
+            loadBuiltinTools();
+        }
+
+        // --- Skill Modal ---
+        async function showViewSkillModal(filePath, name) {
+            try {
+                const response = await fetch(`${API_BASE}/claude/skills${filePath}`);
+                const data = await response.json();
+
+                if (data.error) {
+                    alert(data.error);
+                    return;
+                }
+
+                document.getElementById('view-skill-name').textContent = name;
+                document.getElementById('view-skill-path').value = filePath;
+                document.getElementById('view-skill-path-display').textContent = filePath;
+                document.getElementById('view-skill-content').value = data.content;
+
+                document.getElementById('view-skill-modal').classList.remove('hidden');
+                document.getElementById('view-skill-modal').classList.add('flex');
+            } catch (error) {
+                console.error('Failed to load skill:', error);
+            }
+        }
+
+        function hideViewSkillModal() {
+            document.getElementById('view-skill-modal').classList.add('hidden');
+            document.getElementById('view-skill-modal').classList.remove('flex');
+        }
+
+        async function updateSkill(event) {
+            event.preventDefault();
+
+            const filePath = document.getElementById('view-skill-path').value;
+            const content = document.getElementById('view-skill-content').value;
+
+            try {
+                await fetch(`${API_BASE}/claude/skills${filePath}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ content })
+                });
+                hideViewSkillModal();
+                loadSkills();
+            } catch (error) {
+                console.error('Failed to update skill:', error);
+            }
+        }
+
+        async function deleteSkillFromModal() {
+            const filePath = document.getElementById('view-skill-path').value;
+            const name = document.getElementById('view-skill-name').textContent;
+
+            if (confirm(`Delete skill "${name}"?`)) {
+                try {
+                    await fetch(`${API_BASE}/claude/skills${filePath}`, {
+                        method: 'DELETE'
+                    });
+                    hideViewSkillModal();
+                    loadSkills();
+                } catch (error) {
+                    console.error('Failed to delete skill:', error);
+                }
+            }
         }
     </script>
 </body>

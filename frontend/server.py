@@ -20,34 +20,80 @@ import sys
 import json
 import subprocess
 import asyncio
+import hashlib
+import secrets
 from pathlib import Path
 from datetime import datetime
-from flask import Flask, request, jsonify, send_from_directory
-from flask_cors import CORS
+from functools import wraps
+from flask import Flask, request, jsonify, send_from_directory, Response
 
 # Add mcp_server to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "mcp_server"))
 
 from gastown_integration import BeadStore, Bead, BeadStatus, Mayor
 
-app = Flask(__name__, static_folder='.')
-CORS(app)
+# Serve from React build (frontend-react/dist)
+STATIC_DIR = Path(__file__).parent.parent / "frontend-react" / "dist"
+app = Flask(__name__, static_folder=str(STATIC_DIR))
 
 # Global state
 _project_dir: Path = None
 _bead_store: BeadStore = None
 _mayor: Mayor = None
+_projects_root: Path = None  # Root directory containing all projects
+_current_claude_process: subprocess.Popen = None  # Track current Claude process for stop functionality
+
+# Auth config (set via environment or args)
+AUTH_USERNAME = os.environ.get("VIBES_USERNAME", "")
+AUTH_PASSWORD = os.environ.get("VIBES_PASSWORD", "")
 
 
-def init_app(project_dir: str):
+def check_auth(username: str, password: str) -> bool:
+    """Check if username/password is valid."""
+    if not AUTH_USERNAME or not AUTH_PASSWORD:
+        return True  # No auth configured
+    return secrets.compare_digest(username, AUTH_USERNAME) and \
+           secrets.compare_digest(password, AUTH_PASSWORD)
+
+
+def authenticate():
+    """Send 401 response for authentication."""
+    return Response(
+        'Authentication required',
+        401,
+        {'WWW-Authenticate': 'Basic realm="Vibes"'}
+    )
+
+
+def requires_auth(f):
+    """Decorator for routes that require authentication."""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if AUTH_USERNAME and AUTH_PASSWORD:
+            auth = request.authorization
+            if not auth or not check_auth(auth.username, auth.password):
+                return authenticate()
+        return f(*args, **kwargs)
+    return decorated
+
+
+def init_app(project_dir: str, projects_root: str = None):
     """Initialize the app with a project directory."""
-    global _project_dir, _bead_store, _mayor
+    global _project_dir, _bead_store, _mayor, _projects_root
 
     _project_dir = Path(project_dir)
     _bead_store = BeadStore(_project_dir, auto_commit=True)
     _mayor = Mayor(_project_dir)
 
+    # Set projects root (for project switching)
+    if projects_root:
+        _projects_root = Path(projects_root)
+    else:
+        # Default to parent directory of current project
+        _projects_root = _project_dir.parent
+
     print(f"[vibes-frontend] Initialized for project: {_project_dir}")
+    print(f"[vibes-frontend] Projects root: {_projects_root}")
     print(f"[vibes-frontend] Beads directory: {_bead_store.beads_dir}")
 
 
@@ -56,15 +102,22 @@ def init_app(project_dir: str):
 # ===========================================
 
 @app.route('/')
+@requires_auth
 def index():
     """Serve the main UI."""
-    return send_from_directory('.', 'index.html')
+    return send_from_directory(STATIC_DIR, 'index.html')
 
 
 @app.route('/<path:path>')
+@requires_auth
 def static_files(path):
     """Serve static files."""
-    return send_from_directory('.', path)
+    # Try to serve file from React build, fallback to index.html for SPA routing
+    file_path = STATIC_DIR / path
+    if file_path.exists():
+        return send_from_directory(STATIC_DIR, path)
+    # SPA fallback - serve index.html for client-side routing
+    return send_from_directory(STATIC_DIR, 'index.html')
 
 
 # ===========================================
@@ -72,6 +125,7 @@ def static_files(path):
 # ===========================================
 
 @app.route('/api/board')
+@requires_auth
 def get_board():
     """Get the Kanban board state."""
     if not _bead_store:
@@ -110,6 +164,7 @@ def get_board():
 
 
 @app.route('/api/task', methods=['POST'])
+@requires_auth
 def create_task():
     """Create a new task."""
     if not _mayor:
@@ -131,6 +186,7 @@ def create_task():
 
 
 @app.route('/api/task/<task_id>')
+@requires_auth
 def get_task(task_id):
     """Get a specific task."""
     if not _bead_store:
@@ -144,6 +200,7 @@ def get_task(task_id):
 
 
 @app.route('/api/task/<task_id>/move', methods=['POST'])
+@requires_auth
 def move_task(task_id):
     """Move a task to a different column."""
     if not _bead_store:
@@ -169,6 +226,7 @@ def move_task(task_id):
 
 
 @app.route('/api/task/<task_id>', methods=['DELETE'])
+@requires_auth
 def delete_task(task_id):
     """Delete a task."""
     if not _bead_store:
@@ -179,10 +237,251 @@ def delete_task(task_id):
 
 
 # ===========================================
+# Session & Projects API
+# ===========================================
+
+def get_session_file() -> Path:
+    """Get path to session state file."""
+    if not _project_dir:
+        return None
+    vibes_dir = _project_dir / ".git" / "vibes"
+    vibes_dir.mkdir(parents=True, exist_ok=True)
+    return vibes_dir / "session.json"
+
+
+def load_session() -> dict:
+    """Load session state."""
+    session_file = get_session_file()
+    if not session_file or not session_file.exists():
+        return {}
+    try:
+        return json.loads(session_file.read_text())
+    except:
+        return {}
+
+
+def save_session(data: dict):
+    """Save session state."""
+    session_file = get_session_file()
+    if session_file:
+        session_file.write_text(json.dumps(data, indent=2))
+
+
+@app.route('/api/session/ping', methods=['POST'])
+@requires_auth
+def session_ping():
+    """Record activity and return session summary if returning after inactivity."""
+    session = load_session()
+    now = datetime.now()
+    last_activity = session.get("last_activity")
+
+    # Calculate time since last activity
+    hours_inactive = 0
+    if last_activity:
+        try:
+            last_dt = datetime.fromisoformat(last_activity)
+            hours_inactive = (now - last_dt).total_seconds() / 3600
+        except:
+            pass
+
+    # Update last activity
+    session["last_activity"] = now.isoformat()
+    save_session(session)
+
+    # If inactive for 2+ hours, generate summary
+    summary = None
+    if hours_inactive >= 2:
+        summary = generate_session_summary(hours_inactive)
+
+    return jsonify({
+        "hours_inactive": round(hours_inactive, 1),
+        "summary": summary
+    })
+
+
+def generate_session_summary(hours_inactive: float) -> str:
+    """Generate a welcome-back summary."""
+    lines = [f"Welcome back! You were away for {hours_inactive:.1f} hours."]
+    lines.append("")
+
+    # Board state
+    if _bead_store:
+        stats = _bead_store.get_stats()
+        beads = _bead_store.load_all()
+
+        lines.append(f"**Board Status:** {stats['passing']}/{stats['total']} tasks complete")
+
+        # In progress
+        active = [b for b in beads if str(b.status) in ["in_progress", "BeadStatus.IN_PROGRESS"]]
+        if active:
+            lines.append("")
+            lines.append("**In Progress:**")
+            for b in active[:3]:
+                lines.append(f"- {b.name}")
+
+        # Needs review
+        review = [b for b in beads if str(b.status) in ["needs_review", "BeadStatus.NEEDS_REVIEW"]]
+        if review:
+            lines.append("")
+            lines.append("**Needs Review:**")
+            for b in review[:3]:
+                lines.append(f"- {b.name}")
+
+    # Recent chat
+    chat_history = load_chat_history()
+    if chat_history:
+        recent = chat_history[-2:]  # Last exchange
+        if recent:
+            lines.append("")
+            lines.append("**Last conversation:**")
+            for msg in recent:
+                role = "You" if msg["role"] == "user" else "Claude"
+                content = msg["content"][:100] + "..." if len(msg["content"]) > 100 else msg["content"]
+                lines.append(f"- {role}: {content}")
+
+    return "\n".join(lines)
+
+
+@app.route('/api/projects')
+@requires_auth
+def list_projects():
+    """List available projects."""
+    projects = []
+
+    # Current project
+    if _project_dir:
+        projects.append({
+            "name": _project_dir.name,
+            "path": str(_project_dir),
+            "current": True
+        })
+
+    # Look for other projects in projects root
+    if _projects_root and _projects_root.exists():
+        for p in _projects_root.iterdir():
+            if p.is_dir() and (p / ".git").exists() and p != _project_dir:
+                projects.append({
+                    "name": p.name,
+                    "path": str(p),
+                    "current": False
+                })
+
+    return jsonify({"projects": projects})
+
+
+@app.route('/api/projects/switch', methods=['POST'])
+@requires_auth
+def switch_project():
+    """Switch to a different project."""
+    global _project_dir, _bead_store, _mayor
+
+    data = request.json
+    project_path = data.get("path")
+
+    if not project_path:
+        return jsonify({"error": "No project path provided"}), 400
+
+    new_project = Path(project_path)
+    if not new_project.exists() or not (new_project / ".git").exists():
+        return jsonify({"error": "Invalid project path"}), 400
+
+    # Switch
+    _project_dir = new_project
+    _bead_store = BeadStore(_project_dir, auto_commit=True)
+    _mayor = Mayor(_project_dir)
+
+    return jsonify({
+        "success": True,
+        "project": _project_dir.name,
+        "path": str(_project_dir)
+    })
+
+
+# ===========================================
 # Chat API (Claude Integration)
 # ===========================================
 
+def get_chat_file() -> Path:
+    """Get path to chat history file."""
+    if not _project_dir:
+        return None
+    vibes_dir = _project_dir / ".git" / "vibes"
+    vibes_dir.mkdir(parents=True, exist_ok=True)
+    return vibes_dir / "chat.json"
+
+
+def load_chat_history() -> list:
+    """Load chat history from file."""
+    chat_file = get_chat_file()
+    if not chat_file or not chat_file.exists():
+        return []
+    try:
+        return json.loads(chat_file.read_text())
+    except:
+        return []
+
+
+def save_chat_history(messages: list):
+    """Save chat history to file."""
+    chat_file = get_chat_file()
+    if chat_file:
+        chat_file.write_text(json.dumps(messages, indent=2))
+
+
+@app.route('/api/chat/history')
+@requires_auth
+def get_chat_history():
+    """Get chat history."""
+    messages = load_chat_history()
+    return jsonify({"messages": messages})
+
+
+@app.route('/api/chat/history', methods=['DELETE'])
+@requires_auth
+def clear_chat_history():
+    """Clear chat history."""
+    save_chat_history([])
+    return jsonify({"success": True})
+
+
+@app.route('/api/chat/stop', methods=['POST'])
+@requires_auth
+def stop_chat():
+    """Stop the current Claude generation."""
+    global _current_claude_process
+
+    if _current_claude_process is not None:
+        try:
+            _current_claude_process.kill()
+            return jsonify({"success": True, "message": "Stopped"})
+        except Exception as e:
+            return jsonify({"success": False, "error": str(e)})
+    else:
+        return jsonify({"success": True, "message": "No active process"})
+
+
+@app.route('/api/git/branch')
+@requires_auth
+def get_branch():
+    """Get current git branch."""
+    if not _project_dir:
+        return jsonify({"branch": "main"})
+
+    try:
+        result = subprocess.run(
+            ["git", "branch", "--show-current"],
+            capture_output=True,
+            text=True,
+            cwd=str(_project_dir)
+        )
+        branch = result.stdout.strip() or "main"
+        return jsonify({"branch": branch})
+    except Exception:
+        return jsonify({"branch": "main"})
+
+
 @app.route('/api/chat', methods=['POST'])
+@requires_auth
 def chat():
     """Send a message to Claude."""
     data = request.json
@@ -191,12 +490,33 @@ def chat():
     if not message:
         return jsonify({"error": "No message provided"}), 400
 
+    # Load existing history
+    history = load_chat_history()
+
+    # Add user message
+    history.append({
+        "role": "user",
+        "content": message,
+        "timestamp": datetime.now().isoformat()
+    })
+
     # Build context from current board state
     context = build_chat_context()
 
     # Run Claude CLI with the message
     try:
         response = run_claude_prompt(message, context)
+
+        # Add assistant response
+        history.append({
+            "role": "assistant",
+            "content": response,
+            "timestamp": datetime.now().isoformat()
+        })
+
+        # Save history (keep last 100 messages)
+        save_chat_history(history[-100:])
+
         return jsonify({"response": response})
     except Exception as e:
         return jsonify({"error": str(e), "response": f"Error: {str(e)}"}), 500
@@ -241,6 +561,8 @@ def build_chat_context() -> str:
 
 def run_claude_prompt(message: str, context: str) -> str:
     """Run a prompt through Claude CLI."""
+    global _current_claude_process
+
     full_prompt = f"""You are helping with a task board. Here's the current state:
 
 {context}
@@ -250,26 +572,597 @@ User message: {message}
 Respond helpfully and concisely."""
 
     try:
-        # Try using Claude CLI
-        result = subprocess.run(
+        # Use Popen for interruptibility
+        _current_claude_process = subprocess.Popen(
             ["claude", "--print", "-p", full_prompt],
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=60,
             cwd=str(_project_dir)
         )
 
-        if result.returncode == 0:
-            return result.stdout.strip()
-        else:
-            return f"Claude CLI error: {result.stderr}"
+        try:
+            stdout, stderr = _current_claude_process.communicate(timeout=120)
 
-    except subprocess.TimeoutExpired:
-        return "Request timed out. Claude may be processing a long response."
+            if _current_claude_process.returncode == 0:
+                return stdout.strip()
+            elif _current_claude_process.returncode == -9:  # Killed
+                return "*(Stopped by user)*"
+            else:
+                return f"Claude CLI error: {stderr}"
+        except subprocess.TimeoutExpired:
+            _current_claude_process.kill()
+            _current_claude_process.communicate()
+            return "Request timed out. Claude may be processing a long response."
+        finally:
+            _current_claude_process = None
+
     except FileNotFoundError:
+        _current_claude_process = None
         return "Claude CLI not found. Make sure it's installed and in PATH."
     except Exception as e:
+        _current_claude_process = None
         return f"Error running Claude: {str(e)}"
+
+
+# ===========================================
+# Claude Settings API (MCP, Skills, Agents)
+# ===========================================
+
+def get_claude_settings_paths() -> dict:
+    """Get paths to Claude settings files."""
+    home = Path.home()
+    return {
+        "global": home / ".claude" / "settings.json",
+        "project": _project_dir / ".claude" / "settings.json" if _project_dir else None,
+        "skills_global": home / ".claude" / "skills",
+        "skills_project": _project_dir / ".claude" / "skills" if _project_dir else None,
+    }
+
+
+def load_claude_settings(scope: str = "global") -> dict:
+    """Load Claude settings from file."""
+    paths = get_claude_settings_paths()
+    path = paths.get(scope)
+    if not path or not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text())
+    except:
+        return {}
+
+
+def save_claude_settings(settings: dict, scope: str = "global"):
+    """Save Claude settings to file."""
+    paths = get_claude_settings_paths()
+    path = paths.get(scope)
+    if path:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(settings, indent=2))
+
+
+@app.route('/api/claude/mcp')
+@requires_auth
+def get_mcp_servers():
+    """Get configured MCP servers."""
+    global_settings = load_claude_settings("global")
+    project_settings = load_claude_settings("project")
+
+    servers = []
+
+    # Global MCP servers
+    for name, config in global_settings.get("mcpServers", {}).items():
+        servers.append({
+            "name": name,
+            "scope": "global",
+            "command": config.get("command", ""),
+            "args": config.get("args", []),
+            "enabled": not config.get("disabled", False)
+        })
+
+    # Project MCP servers
+    for name, config in project_settings.get("mcpServers", {}).items():
+        servers.append({
+            "name": name,
+            "scope": "project",
+            "command": config.get("command", ""),
+            "args": config.get("args", []),
+            "enabled": not config.get("disabled", False)
+        })
+
+    return jsonify({"servers": servers})
+
+
+@app.route('/api/claude/mcp', methods=['POST'])
+@requires_auth
+def add_mcp_server():
+    """Add a new MCP server."""
+    data = request.json
+    name = data.get("name")
+    command = data.get("command")
+    args = data.get("args", [])
+    scope = data.get("scope", "project")
+
+    if not name or not command:
+        return jsonify({"error": "Name and command required"}), 400
+
+    settings = load_claude_settings(scope)
+    if "mcpServers" not in settings:
+        settings["mcpServers"] = {}
+
+    settings["mcpServers"][name] = {
+        "command": command,
+        "args": args
+    }
+
+    save_claude_settings(settings, scope)
+    return jsonify({"success": True, "name": name})
+
+
+@app.route('/api/claude/mcp/<name>/toggle', methods=['POST'])
+@requires_auth
+def toggle_mcp_server(name):
+    """Toggle an MCP server on/off."""
+    data = request.json
+    scope = data.get("scope", "project")
+    enabled = data.get("enabled", True)
+
+    settings = load_claude_settings(scope)
+    if "mcpServers" in settings and name in settings["mcpServers"]:
+        if enabled:
+            settings["mcpServers"][name].pop("disabled", None)
+        else:
+            settings["mcpServers"][name]["disabled"] = True
+        save_claude_settings(settings, scope)
+        return jsonify({"success": True, "enabled": enabled})
+
+    return jsonify({"error": "Server not found"}), 404
+
+
+@app.route('/api/claude/mcp/<name>', methods=['GET'])
+@requires_auth
+def get_mcp_server(name):
+    """Get a single MCP server's details."""
+    data = request.args
+    scope = data.get("scope", "project")
+
+    settings = load_claude_settings(scope)
+    if "mcpServers" in settings and name in settings["mcpServers"]:
+        config = settings["mcpServers"][name]
+        return jsonify({
+            "name": name,
+            "scope": scope,
+            "command": config.get("command", ""),
+            "args": config.get("args", []),
+            "env": config.get("env", {}),
+            "enabled": not config.get("disabled", False)
+        })
+
+    return jsonify({"error": "Server not found"}), 404
+
+
+@app.route('/api/claude/mcp/<name>', methods=['PUT'])
+@requires_auth
+def update_mcp_server(name):
+    """Update an MCP server."""
+    data = request.json
+    scope = data.get("scope", "project")
+    new_name = data.get("name", name)
+    command = data.get("command")
+    args = data.get("args", [])
+    env = data.get("env", {})
+
+    settings = load_claude_settings(scope)
+    if "mcpServers" not in settings or name not in settings["mcpServers"]:
+        return jsonify({"error": "Server not found"}), 404
+
+    # Get existing config
+    config = settings["mcpServers"][name]
+
+    # If renaming, delete old entry
+    if new_name != name:
+        del settings["mcpServers"][name]
+
+    # Update config
+    settings["mcpServers"][new_name] = {
+        "command": command or config.get("command", ""),
+        "args": args if args else config.get("args", []),
+    }
+    if env:
+        settings["mcpServers"][new_name]["env"] = env
+    if config.get("disabled"):
+        settings["mcpServers"][new_name]["disabled"] = True
+
+    save_claude_settings(settings, scope)
+    return jsonify({"success": True, "name": new_name})
+
+
+@app.route('/api/claude/mcp/<name>', methods=['DELETE'])
+@requires_auth
+def delete_mcp_server(name):
+    """Delete an MCP server."""
+    data = request.json or {}
+    scope = data.get("scope", "project")
+
+    settings = load_claude_settings(scope)
+    if "mcpServers" in settings and name in settings["mcpServers"]:
+        del settings["mcpServers"][name]
+        save_claude_settings(settings, scope)
+        return jsonify({"success": True})
+
+    return jsonify({"error": "Server not found"}), 404
+
+
+@app.route('/api/claude/skills')
+@requires_auth
+def get_skills():
+    """Get available skills."""
+    paths = get_claude_settings_paths()
+    skills = []
+
+    # Check both global and project skills directories
+    for scope, skills_dir in [("global", paths["skills_global"]), ("project", paths["skills_project"])]:
+        if skills_dir and skills_dir.exists():
+            for skill_file in skills_dir.rglob("*.md"):
+                try:
+                    content = skill_file.read_text()
+                    # Parse frontmatter
+                    name = skill_file.stem
+                    description = ""
+                    if content.startswith("---"):
+                        parts = content.split("---", 2)
+                        if len(parts) >= 3:
+                            import re
+                            name_match = re.search(r'name:\s*(.+)', parts[1])
+                            desc_match = re.search(r'description:\s*(.+)', parts[1])
+                            if name_match:
+                                name = name_match.group(1).strip()
+                            if desc_match:
+                                description = desc_match.group(1).strip()
+
+                    skills.append({
+                        "name": name,
+                        "file": str(skill_file),
+                        "scope": scope,
+                        "description": description,
+                        "enabled": True  # Skills are always enabled if they exist
+                    })
+                except:
+                    pass
+
+    return jsonify({"skills": skills})
+
+
+@app.route('/api/claude/skills', methods=['POST'])
+@requires_auth
+def create_skill():
+    """Create a new skill."""
+    data = request.json
+    name = data.get("name")
+    description = data.get("description", "")
+    trigger = data.get("trigger", "")
+    solution = data.get("solution", "")
+    scope = data.get("scope", "project")
+
+    if not name:
+        return jsonify({"error": "Name required"}), 400
+
+    paths = get_claude_settings_paths()
+    skills_dir = paths[f"skills_{scope}"]
+    if not skills_dir:
+        return jsonify({"error": "Invalid scope"}), 400
+
+    skills_dir.mkdir(parents=True, exist_ok=True)
+
+    # Create skill file
+    content = f"""---
+name: {name}
+description: {description}
+author: user
+version: 1.0.0
+---
+
+## Trigger
+{trigger}
+
+## Solution
+{solution}
+
+## Verification
+Verify the solution works as expected.
+"""
+
+    skill_file = skills_dir / f"{name.lower().replace(' ', '-')}.md"
+    skill_file.write_text(content)
+
+    return jsonify({"success": True, "file": str(skill_file)})
+
+
+@app.route('/api/claude/skills/<path:file_path>')
+@requires_auth
+def get_skill_content(file_path):
+    """Get skill file content."""
+    try:
+        path = Path("/" + file_path)
+        if path.exists() and path.suffix == ".md":
+            return jsonify({"content": path.read_text(), "path": str(path)})
+        return jsonify({"error": "Skill not found"}), 404
+    except:
+        return jsonify({"error": "Invalid path"}), 400
+
+
+@app.route('/api/claude/skills/<path:file_path>', methods=['PUT'])
+@requires_auth
+def update_skill(file_path):
+    """Update a skill file."""
+    try:
+        path = Path("/" + file_path)
+        if not path.exists() or path.suffix != ".md":
+            return jsonify({"error": "Skill not found"}), 404
+
+        data = request.json
+        content = data.get("content")
+        if content is None:
+            return jsonify({"error": "Content required"}), 400
+
+        path.write_text(content)
+        return jsonify({"success": True, "path": str(path)})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+
+@app.route('/api/claude/skills/<path:file_path>', methods=['DELETE'])
+@requires_auth
+def delete_skill(file_path):
+    """Delete a skill file."""
+    try:
+        path = Path("/" + file_path)
+        if not path.exists() or path.suffix != ".md":
+            return jsonify({"error": "Skill not found"}), 404
+
+        path.unlink()
+        return jsonify({"success": True})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+
+# Built-in tools list with detailed info
+CLAUDE_TOOLS = [
+    {
+        "name": "Read",
+        "description": "Read files from filesystem",
+        "details": "Reads file contents by path. Supports reading images, PDFs, and Jupyter notebooks. Can specify line offset and limit for large files."
+    },
+    {
+        "name": "Write",
+        "description": "Write/create files",
+        "details": "Creates or overwrites files. Requires reading the file first if it exists. Use for creating new files or complete rewrites."
+    },
+    {
+        "name": "Edit",
+        "description": "Make targeted edits to files",
+        "details": "Performs exact string replacements in files. Use old_string to match existing content and new_string for replacement. Supports replace_all for multiple occurrences."
+    },
+    {
+        "name": "Bash",
+        "description": "Execute shell commands",
+        "details": "Runs bash commands with optional timeout. Captures output. Use for git, npm, docker, and other CLI operations. Avoid for file operations (use Read/Write/Edit instead)."
+    },
+    {
+        "name": "Glob",
+        "description": "Find files by pattern",
+        "details": "Fast file pattern matching. Supports patterns like '**/*.js' or 'src/**/*.ts'. Returns file paths sorted by modification time."
+    },
+    {
+        "name": "Grep",
+        "description": "Search file contents",
+        "details": "Powerful regex search using ripgrep. Supports glob patterns, file type filters, context lines, and multiple output modes."
+    },
+    {
+        "name": "Task",
+        "description": "Spawn sub-agents",
+        "details": "Launches specialized agents for complex tasks. Available types: Bash, Explore, Plan, general-purpose. Agents run autonomously and return results."
+    },
+    {
+        "name": "WebFetch",
+        "description": "Fetch web content",
+        "details": "Fetches URL content and processes with AI. Converts HTML to markdown. Use for retrieving and analyzing web pages."
+    },
+    {
+        "name": "WebSearch",
+        "description": "Search the web",
+        "details": "Performs web searches for up-to-date information. Returns search results with links. Use for current events and recent data beyond training cutoff."
+    },
+    {
+        "name": "NotebookEdit",
+        "description": "Edit Jupyter notebooks",
+        "details": "Edit cells in .ipynb files. Supports replace, insert, and delete modes. Can set cell type (code or markdown)."
+    },
+    {
+        "name": "TodoWrite",
+        "description": "Track task progress",
+        "details": "Creates and manages structured task lists. Track progress with pending/in_progress/completed states. Use for complex multi-step tasks."
+    },
+]
+
+
+@app.route('/api/claude/tools')
+@requires_auth
+def get_tools():
+    """Get Claude's built-in tools and their status."""
+    global_settings = load_claude_settings("global")
+    project_settings = load_claude_settings("project")
+
+    # Merge denied tools from both scopes
+    denied_global = set(global_settings.get("deniedTools", []))
+    denied_project = set(project_settings.get("deniedTools", []))
+    all_denied = denied_global | denied_project
+
+    tools = []
+    for tool in CLAUDE_TOOLS:
+        tools.append({
+            "name": tool["name"],
+            "description": tool["description"],
+            "details": tool.get("details", ""),
+            "enabled": tool["name"] not in all_denied,
+            "denied_in": "global" if tool["name"] in denied_global else ("project" if tool["name"] in denied_project else None)
+        })
+
+    return jsonify({"tools": tools})
+
+
+@app.route('/api/claude/tools/<name>')
+@requires_auth
+def get_tool_details(name):
+    """Get detailed info about a specific tool."""
+    for tool in CLAUDE_TOOLS:
+        if tool["name"] == name:
+            global_settings = load_claude_settings("global")
+            project_settings = load_claude_settings("project")
+            denied_global = set(global_settings.get("deniedTools", []))
+            denied_project = set(project_settings.get("deniedTools", []))
+
+            return jsonify({
+                "name": tool["name"],
+                "description": tool["description"],
+                "details": tool.get("details", ""),
+                "enabled": tool["name"] not in (denied_global | denied_project),
+                "denied_in": "global" if tool["name"] in denied_global else ("project" if tool["name"] in denied_project else None)
+            })
+
+    return jsonify({"error": "Tool not found"}), 404
+
+
+@app.route('/api/claude/tools/<name>/toggle', methods=['POST'])
+@requires_auth
+def toggle_tool(name):
+    """Toggle a tool on/off."""
+    data = request.json
+    enabled = data.get("enabled", True)
+    scope = data.get("scope", "project")
+
+    settings = load_claude_settings(scope)
+    denied = set(settings.get("deniedTools", []))
+
+    if enabled:
+        denied.discard(name)
+    else:
+        denied.add(name)
+
+    settings["deniedTools"] = list(denied)
+    save_claude_settings(settings, scope)
+
+    return jsonify({"success": True, "enabled": enabled})
+
+
+@app.route('/api/claude/hooks')
+@requires_auth
+def get_hooks():
+    """Get configured hooks."""
+    global_settings = load_claude_settings("global")
+    project_settings = load_claude_settings("project")
+
+    hooks = []
+
+    for scope, settings in [("global", global_settings), ("project", project_settings)]:
+        for hook in settings.get("hooks", []):
+            hooks.append({
+                "event": hook.get("event", ""),
+                "command": hook.get("command", ""),
+                "scope": scope
+            })
+
+    return jsonify({
+        "hooks": hooks,
+        "available_events": ["PreToolUse", "PostToolUse", "Notification", "Stop"]
+    })
+
+
+@app.route('/api/claude/hooks', methods=['POST'])
+@requires_auth
+def add_hook():
+    """Add a new hook."""
+    data = request.json
+    event = data.get("event")
+    command = data.get("command")
+    scope = data.get("scope", "project")
+
+    if not event or not command:
+        return jsonify({"error": "Event and command required"}), 400
+
+    settings = load_claude_settings(scope)
+    if "hooks" not in settings:
+        settings["hooks"] = []
+
+    settings["hooks"].append({
+        "event": event,
+        "command": command
+    })
+
+    save_claude_settings(settings, scope)
+    return jsonify({"success": True})
+
+
+@app.route('/api/claude/hooks', methods=['DELETE'])
+@requires_auth
+def delete_hook():
+    """Delete a hook."""
+    data = request.json
+    event = data.get("event")
+    command = data.get("command")
+    scope = data.get("scope", "project")
+
+    settings = load_claude_settings(scope)
+    hooks = settings.get("hooks", [])
+
+    settings["hooks"] = [h for h in hooks if not (h.get("event") == event and h.get("command") == command)]
+    save_claude_settings(settings, scope)
+
+    return jsonify({"success": True})
+
+
+@app.route('/api/claude/hooks', methods=['PUT'])
+@requires_auth
+def update_hook():
+    """Update a hook."""
+    data = request.json
+    old_event = data.get("old_event")
+    old_command = data.get("old_command")
+    old_scope = data.get("old_scope", "project")
+
+    new_event = data.get("event")
+    new_command = data.get("command")
+    new_scope = data.get("scope", old_scope)
+
+    if not all([old_event, old_command, new_event, new_command]):
+        return jsonify({"error": "Missing required fields"}), 400
+
+    # If scope changed, remove from old and add to new
+    if old_scope != new_scope:
+        # Remove from old scope
+        old_settings = load_claude_settings(old_scope)
+        old_settings["hooks"] = [h for h in old_settings.get("hooks", [])
+                                  if not (h.get("event") == old_event and h.get("command") == old_command)]
+        save_claude_settings(old_settings, old_scope)
+
+        # Add to new scope
+        new_settings = load_claude_settings(new_scope)
+        if "hooks" not in new_settings:
+            new_settings["hooks"] = []
+        new_settings["hooks"].append({"event": new_event, "command": new_command})
+        save_claude_settings(new_settings, new_scope)
+    else:
+        # Same scope, update in place
+        settings = load_claude_settings(old_scope)
+        hooks = settings.get("hooks", [])
+        for i, h in enumerate(hooks):
+            if h.get("event") == old_event and h.get("command") == old_command:
+                hooks[i] = {"event": new_event, "command": new_command}
+                break
+        settings["hooks"] = hooks
+        save_claude_settings(settings, old_scope)
+
+    return jsonify({"success": True})
 
 
 # ===========================================
@@ -315,6 +1208,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Vibes Frontend Server")
     parser.add_argument("--project", "-p", type=str, default=".",
                         help="Project directory (default: current)")
+    parser.add_argument("--projects-root", type=str, default=None,
+                        help="Root directory containing all projects (for switching)")
     parser.add_argument("--port", type=int, default=3000,
                         help="Port to listen on (default: 3000)")
     parser.add_argument("--host", type=str, default="0.0.0.0",
@@ -333,7 +1228,9 @@ if __name__ == "__main__":
         print(f"Error: Not a git repository: {project_dir}")
         sys.exit(1)
 
-    init_app(str(project_dir))
+    # Get projects root from arg or env
+    projects_root = args.projects_root or os.environ.get("VIBES_PROJECTS_ROOT")
+    init_app(str(project_dir), projects_root)
 
     print(f"[vibes-frontend] Starting server on http://{args.host}:{args.port}")
     app.run(host=args.host, port=args.port, debug=True)
