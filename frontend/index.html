@@ -55,7 +55,23 @@
     <!-- Header -->
     <header class="bg-gray-800 border-b border-gray-700 px-4 py-3 flex-shrink-0">
         <div class="flex items-center justify-between">
-            <h1 class="text-lg font-bold text-blue-400">⚡ Vibes</h1>
+            <div class="flex items-center gap-2">
+                <h1 class="text-lg font-bold text-blue-400">⚡</h1>
+                <!-- Project Dropdown -->
+                <div class="relative">
+                    <button onclick="toggleProjectDropdown()" id="project-btn" class="flex items-center gap-1 px-2 py-1 bg-gray-700 rounded-lg hover:bg-gray-600 text-sm">
+                        <span id="current-project">vibes</span>
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+                        </svg>
+                    </button>
+                    <div id="project-dropdown" class="hidden absolute left-0 mt-1 w-48 bg-gray-800 border border-gray-700 rounded-lg shadow-lg z-50">
+                        <div id="project-list" class="py-1 max-h-60 overflow-y-auto">
+                            <!-- Projects populated by JS -->
+                        </div>
+                    </div>
+                </div>
+            </div>
             <div class="flex items-center gap-2">
                 <span id="stats" class="text-xs text-gray-400 hidden sm:inline">Loading...</span>
                 <button onclick="refreshBoard()" class="p-2 bg-gray-700 rounded-lg hover:bg-gray-600 active:bg-gray-500 text-sm">
@@ -302,7 +318,16 @@
             refreshBoard();
             fetchBranchName();
             loadChatHistory();
+            loadProjects();
+            checkSession();
             setInterval(refreshBoard, 10000);
+
+            // Close dropdown when clicking outside
+            document.addEventListener('click', (e) => {
+                if (!e.target.closest('#project-btn') && !e.target.closest('#project-dropdown')) {
+                    document.getElementById('project-dropdown').classList.add('hidden');
+                }
+            });
         });
 
         // Fetch current branch
@@ -699,6 +724,85 @@
                 } catch (error) {
                     console.error('Failed to clear chat:', error);
                 }
+            }
+        }
+
+        // ===========================================
+        // Project Switching
+        // ===========================================
+
+        function toggleProjectDropdown() {
+            document.getElementById('project-dropdown').classList.toggle('hidden');
+        }
+
+        async function loadProjects() {
+            try {
+                const response = await fetch(`${API_BASE}/projects`);
+                const data = await response.json();
+
+                const list = document.getElementById('project-list');
+                list.innerHTML = '';
+
+                if (data.projects) {
+                    data.projects.forEach(project => {
+                        const btn = document.createElement('button');
+                        btn.className = `w-full text-left px-3 py-2 hover:bg-gray-700 text-sm ${project.current ? 'text-blue-400' : ''}`;
+                        btn.innerHTML = project.current
+                            ? `<span class="mr-1">●</span> ${project.name}`
+                            : project.name;
+                        btn.onclick = () => switchProject(project.path);
+                        list.appendChild(btn);
+
+                        if (project.current) {
+                            document.getElementById('current-project').textContent = project.name;
+                        }
+                    });
+                }
+            } catch (error) {
+                console.error('Failed to load projects:', error);
+            }
+        }
+
+        async function switchProject(path) {
+            try {
+                const response = await fetch(`${API_BASE}/projects/switch`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ path })
+                });
+                const data = await response.json();
+
+                if (data.success) {
+                    document.getElementById('current-project').textContent = data.project;
+                    document.getElementById('project-dropdown').classList.add('hidden');
+
+                    // Reload everything for new project
+                    refreshBoard();
+                    fetchBranchName();
+                    loadChatHistory();
+                    loadProjects();
+                }
+            } catch (error) {
+                console.error('Failed to switch project:', error);
+            }
+        }
+
+        // ===========================================
+        // Session Management
+        // ===========================================
+
+        async function checkSession() {
+            try {
+                const response = await fetch(`${API_BASE}/session/ping`, { method: 'POST' });
+                const data = await response.json();
+
+                if (data.summary) {
+                    // Show welcome back message in chat
+                    showView('chat');
+                    addChatMessage(data.summary, 'assistant');
+                }
+            } catch (error) {
+                console.error('Failed to check session:', error);
             }
         }
     </script>

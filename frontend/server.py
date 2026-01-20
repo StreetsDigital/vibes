@@ -38,6 +38,7 @@ app = Flask(__name__, static_folder='.')
 _project_dir: Path = None
 _bead_store: BeadStore = None
 _mayor: Mayor = None
+_projects_root: Path = None  # Root directory containing all projects
 
 # Auth config (set via environment or args)
 AUTH_USERNAME = os.environ.get("VIBES_USERNAME", "")
@@ -73,15 +74,23 @@ def requires_auth(f):
     return decorated
 
 
-def init_app(project_dir: str):
+def init_app(project_dir: str, projects_root: str = None):
     """Initialize the app with a project directory."""
-    global _project_dir, _bead_store, _mayor
+    global _project_dir, _bead_store, _mayor, _projects_root
 
     _project_dir = Path(project_dir)
     _bead_store = BeadStore(_project_dir, auto_commit=True)
     _mayor = Mayor(_project_dir)
 
+    # Set projects root (for project switching)
+    if projects_root:
+        _projects_root = Path(projects_root)
+    else:
+        # Default to parent directory of current project
+        _projects_root = _project_dir.parent
+
     print(f"[vibes-frontend] Initialized for project: {_project_dir}")
+    print(f"[vibes-frontend] Projects root: {_projects_root}")
     print(f"[vibes-frontend] Beads directory: {_bead_store.beads_dir}")
 
 
@@ -217,6 +226,167 @@ def delete_task(task_id):
 
     result = _bead_store.delete(task_id)
     return jsonify(result)
+
+
+# ===========================================
+# Session & Projects API
+# ===========================================
+
+def get_session_file() -> Path:
+    """Get path to session state file."""
+    if not _project_dir:
+        return None
+    vibes_dir = _project_dir / ".git" / "vibes"
+    vibes_dir.mkdir(parents=True, exist_ok=True)
+    return vibes_dir / "session.json"
+
+
+def load_session() -> dict:
+    """Load session state."""
+    session_file = get_session_file()
+    if not session_file or not session_file.exists():
+        return {}
+    try:
+        return json.loads(session_file.read_text())
+    except:
+        return {}
+
+
+def save_session(data: dict):
+    """Save session state."""
+    session_file = get_session_file()
+    if session_file:
+        session_file.write_text(json.dumps(data, indent=2))
+
+
+@app.route('/api/session/ping', methods=['POST'])
+@requires_auth
+def session_ping():
+    """Record activity and return session summary if returning after inactivity."""
+    session = load_session()
+    now = datetime.now()
+    last_activity = session.get("last_activity")
+
+    # Calculate time since last activity
+    hours_inactive = 0
+    if last_activity:
+        try:
+            last_dt = datetime.fromisoformat(last_activity)
+            hours_inactive = (now - last_dt).total_seconds() / 3600
+        except:
+            pass
+
+    # Update last activity
+    session["last_activity"] = now.isoformat()
+    save_session(session)
+
+    # If inactive for 2+ hours, generate summary
+    summary = None
+    if hours_inactive >= 2:
+        summary = generate_session_summary(hours_inactive)
+
+    return jsonify({
+        "hours_inactive": round(hours_inactive, 1),
+        "summary": summary
+    })
+
+
+def generate_session_summary(hours_inactive: float) -> str:
+    """Generate a welcome-back summary."""
+    lines = [f"Welcome back! You were away for {hours_inactive:.1f} hours."]
+    lines.append("")
+
+    # Board state
+    if _bead_store:
+        stats = _bead_store.get_stats()
+        beads = _bead_store.load_all()
+
+        lines.append(f"**Board Status:** {stats['passing']}/{stats['total']} tasks complete")
+
+        # In progress
+        active = [b for b in beads if str(b.status) in ["in_progress", "BeadStatus.IN_PROGRESS"]]
+        if active:
+            lines.append("")
+            lines.append("**In Progress:**")
+            for b in active[:3]:
+                lines.append(f"- {b.name}")
+
+        # Needs review
+        review = [b for b in beads if str(b.status) in ["needs_review", "BeadStatus.NEEDS_REVIEW"]]
+        if review:
+            lines.append("")
+            lines.append("**Needs Review:**")
+            for b in review[:3]:
+                lines.append(f"- {b.name}")
+
+    # Recent chat
+    chat_history = load_chat_history()
+    if chat_history:
+        recent = chat_history[-2:]  # Last exchange
+        if recent:
+            lines.append("")
+            lines.append("**Last conversation:**")
+            for msg in recent:
+                role = "You" if msg["role"] == "user" else "Claude"
+                content = msg["content"][:100] + "..." if len(msg["content"]) > 100 else msg["content"]
+                lines.append(f"- {role}: {content}")
+
+    return "\n".join(lines)
+
+
+@app.route('/api/projects')
+@requires_auth
+def list_projects():
+    """List available projects."""
+    projects = []
+
+    # Current project
+    if _project_dir:
+        projects.append({
+            "name": _project_dir.name,
+            "path": str(_project_dir),
+            "current": True
+        })
+
+    # Look for other projects in projects root
+    if _projects_root and _projects_root.exists():
+        for p in _projects_root.iterdir():
+            if p.is_dir() and (p / ".git").exists() and p != _project_dir:
+                projects.append({
+                    "name": p.name,
+                    "path": str(p),
+                    "current": False
+                })
+
+    return jsonify({"projects": projects})
+
+
+@app.route('/api/projects/switch', methods=['POST'])
+@requires_auth
+def switch_project():
+    """Switch to a different project."""
+    global _project_dir, _bead_store, _mayor
+
+    data = request.json
+    project_path = data.get("path")
+
+    if not project_path:
+        return jsonify({"error": "No project path provided"}), 400
+
+    new_project = Path(project_path)
+    if not new_project.exists() or not (new_project / ".git").exists():
+        return jsonify({"error": "Invalid project path"}), 400
+
+    # Switch
+    _project_dir = new_project
+    _bead_store = BeadStore(_project_dir, auto_commit=True)
+    _mayor = Mayor(_project_dir)
+
+    return jsonify({
+        "success": True,
+        "project": _project_dir.name,
+        "path": str(_project_dir)
+    })
 
 
 # ===========================================
@@ -441,6 +611,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Vibes Frontend Server")
     parser.add_argument("--project", "-p", type=str, default=".",
                         help="Project directory (default: current)")
+    parser.add_argument("--projects-root", type=str, default=None,
+                        help="Root directory containing all projects (for switching)")
     parser.add_argument("--port", type=int, default=3000,
                         help="Port to listen on (default: 3000)")
     parser.add_argument("--host", type=str, default="0.0.0.0",
@@ -459,7 +631,9 @@ if __name__ == "__main__":
         print(f"Error: Not a git repository: {project_dir}")
         sys.exit(1)
 
-    init_app(str(project_dir))
+    # Get projects root from arg or env
+    projects_root = args.projects_root or os.environ.get("VIBES_PROJECTS_ROOT")
+    init_app(str(project_dir), projects_root)
 
     print(f"[vibes-frontend] Starting server on http://{args.host}:{args.port}")
     app.run(host=args.host, port=args.port, debug=True)
