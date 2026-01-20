@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Vibes - Task Board</title>
+    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .drag-over { background-color: rgba(59, 130, 246, 0.1); }
+        .dragging { opacity: 0.5; }
+        [data-loading] { display: none; }
+        .htmx-request [data-loading] { display: block; }
+        .htmx-request [data-content] { opacity: 0.5; }
+    </style>
+</head>
+<body class="bg-gray-900 text-gray-100 min-h-screen">
+    <!-- Header -->
+    <header class="bg-gray-800 border-b border-gray-700 px-6 py-4">
+        <div class="flex items-center justify-between max-w-7xl mx-auto">
+            <h1 class="text-xl font-bold text-blue-400">⚡ Vibes</h1>
+            <div class="flex items-center gap-4">
+                <span id="stats" class="text-sm text-gray-400">Loading...</span>
+                <button onclick="refreshBoard()" class="px-3 py-1 bg-gray-700 rounded hover:bg-gray-600 text-sm">
+                    ↻ Refresh
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <div class="flex max-w-7xl mx-auto">
+        <!-- Kanban Board -->
+        <main class="flex-1 p-6">
+            <div class="grid grid-cols-4 gap-4">
+                <!-- To Do -->
+                <div class="bg-gray-800 rounded-lg p-4">
+                    <h2 class="font-semibold text-gray-300 mb-4 flex items-center gap-2">
+                        <span class="w-3 h-3 bg-gray-500 rounded-full"></span>
+                        To Do
+                        <span id="todo-count" class="text-xs bg-gray-700 px-2 py-0.5 rounded-full">0</span>
+                    </h2>
+                    <div id="todo" class="space-y-2 min-h-[200px]" ondragover="allowDrop(event)" ondrop="drop(event, 'pending')">
+                    </div>
+                </div>
+
+                <!-- In Progress -->
+                <div class="bg-gray-800 rounded-lg p-4">
+                    <h2 class="font-semibold text-gray-300 mb-4 flex items-center gap-2">
+                        <span class="w-3 h-3 bg-blue-500 rounded-full"></span>
+                        In Progress
+                        <span id="progress-count" class="text-xs bg-gray-700 px-2 py-0.5 rounded-full">0</span>
+                    </h2>
+                    <div id="in_progress" class="space-y-2 min-h-[200px]" ondragover="allowDrop(event)" ondrop="drop(event, 'in_progress')">
+                    </div>
+                </div>
+
+                <!-- Review -->
+                <div class="bg-gray-800 rounded-lg p-4">
+                    <h2 class="font-semibold text-gray-300 mb-4 flex items-center gap-2">
+                        <span class="w-3 h-3 bg-yellow-500 rounded-full"></span>
+                        Review
+                        <span id="review-count" class="text-xs bg-gray-700 px-2 py-0.5 rounded-full">0</span>
+                    </h2>
+                    <div id="needs_review" class="space-y-2 min-h-[200px]" ondragover="allowDrop(event)" ondrop="drop(event, 'needs_review')">
+                    </div>
+                </div>
+
+                <!-- Done -->
+                <div class="bg-gray-800 rounded-lg p-4">
+                    <h2 class="font-semibold text-gray-300 mb-4 flex items-center gap-2">
+                        <span class="w-3 h-3 bg-green-500 rounded-full"></span>
+                        Done
+                        <span id="done-count" class="text-xs bg-gray-700 px-2 py-0.5 rounded-full">0</span>
+                    </h2>
+                    <div id="passing" class="space-y-2 min-h-[200px]" ondragover="allowDrop(event)" ondrop="drop(event, 'passing')">
+                    </div>
+                </div>
+            </div>
+
+            <!-- Add Task -->
+            <div class="mt-6">
+                <button onclick="showAddTask()" class="px-4 py-2 bg-blue-600 rounded-lg hover:bg-blue-500 text-sm font-medium">
+                    + Add Task
+                </button>
+            </div>
+        </main>
+
+        <!-- Claude Chat Sidebar -->
+        <aside class="w-96 bg-gray-800 border-l border-gray-700 flex flex-col h-[calc(100vh-73px)]">
+            <div class="p-4 border-b border-gray-700">
+                <h2 class="font-semibold text-gray-300">Claude</h2>
+                <p class="text-xs text-gray-500">Ask about tasks or get help</p>
+            </div>
+
+            <!-- Chat Messages -->
+            <div id="chat-messages" class="flex-1 overflow-y-auto p-4 space-y-4">
+                <div class="text-gray-500 text-sm text-center py-8">
+                    Start a conversation with Claude
+                </div>
+            </div>
+
+            <!-- Chat Input -->
+            <div class="p-4 border-t border-gray-700">
+                <form id="chat-form" onsubmit="sendMessage(event)" class="flex gap-2">
+                    <input
+                        type="text"
+                        id="chat-input"
+                        placeholder="Ask Claude..."
+                        class="flex-1 bg-gray-700 rounded-lg px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    >
+                    <button type="submit" class="px-4 py-2 bg-blue-600 rounded-lg hover:bg-blue-500 text-sm">
+                        Send
+                    </button>
+                </form>
+                <div class="mt-2 flex gap-2">
+                    <button onclick="quickPrompt('Summarize current tasks')" class="text-xs px-2 py-1 bg-gray-700 rounded hover:bg-gray-600">
+                        Summarize
+                    </button>
+                    <button onclick="quickPrompt('What should I work on next?')" class="text-xs px-2 py-1 bg-gray-700 rounded hover:bg-gray-600">
+                        Next task
+                    </button>
+                    <button onclick="quickPrompt('Run quality checks')" class="text-xs px-2 py-1 bg-gray-700 rounded hover:bg-gray-600">
+                        Quality
+                    </button>
+                </div>
+            </div>
+        </aside>
+    </div>
+
+    <!-- Add Task Modal -->
+    <div id="add-task-modal" class="fixed inset-0 bg-black/50 hidden items-center justify-center">
+        <div class="bg-gray-800 rounded-lg p-6 w-full max-w-md">
+            <h3 class="text-lg font-semibold mb-4">Add New Task</h3>
+            <form onsubmit="addTask(event)">
+                <div class="space-y-4">
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-1">Name</label>
+                        <input type="text" id="task-name" required class="w-full bg-gray-700 rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    </div>
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-1">Description</label>
+                        <textarea id="task-desc" rows="3" class="w-full bg-gray-700 rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"></textarea>
+                    </div>
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-1">Test Cases (one per line)</label>
+                        <textarea id="task-tests" rows="3" placeholder="Test case 1&#10;Test case 2" class="w-full bg-gray-700 rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"></textarea>
+                    </div>
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-1">Priority</label>
+                        <input type="number" id="task-priority" value="0" class="w-full bg-gray-700 rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    </div>
+                </div>
+                <div class="flex justify-end gap-2 mt-6">
+                    <button type="button" onclick="hideAddTask()" class="px-4 py-2 bg-gray-700 rounded hover:bg-gray-600">Cancel</button>
+                    <button type="submit" class="px-4 py-2 bg-blue-600 rounded hover:bg-blue-500">Add Task</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Task Detail Modal -->
+    <div id="task-detail-modal" class="fixed inset-0 bg-black/50 hidden items-center justify-center">
+        <div class="bg-gray-800 rounded-lg p-6 w-full max-w-lg">
+            <div class="flex justify-between items-start mb-4">
+                <h3 id="detail-name" class="text-lg font-semibold"></h3>
+                <button onclick="hideTaskDetail()" class="text-gray-500 hover:text-gray-300">✕</button>
+            </div>
+            <div id="detail-content" class="space-y-4">
+            </div>
+            <div class="flex justify-end gap-2 mt-6">
+                <button onclick="workOnTask()" class="px-4 py-2 bg-blue-600 rounded hover:bg-blue-500">
+                    Work on this
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = '/api';
+        let currentTask = null;
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', () => {
+            refreshBoard();
+            // Poll for updates every 10 seconds
+            setInterval(refreshBoard, 10000);
+        });
+
+        // Fetch and render board
+        async function refreshBoard() {
+            try {
+                const response = await fetch(`${API_BASE}/board`);
+                const data = await response.json();
+                renderBoard(data);
+            } catch (error) {
+                console.error('Failed to fetch board:', error);
+            }
+        }
+
+        function renderBoard(data) {
+            const columns = {
+                'pending': 'todo',
+                'in_progress': 'in_progress',
+                'needs_review': 'needs_review',
+                'passing': 'passing'
+            };
+
+            // Clear columns
+            Object.values(columns).forEach(id => {
+                document.getElementById(id).innerHTML = '';
+            });
+
+            // Render tasks
+            if (data.board) {
+                Object.entries(data.board).forEach(([status, tasks]) => {
+                    const columnId = columns[status] || status;
+                    const column = document.getElementById(columnId);
+                    if (column && tasks) {
+                        tasks.forEach(task => {
+                            column.appendChild(createTaskCard(task));
+                        });
+                    }
+                });
+            }
+
+            // Update counts
+            document.getElementById('todo-count').textContent = data.board?.todo?.length || 0;
+            document.getElementById('progress-count').textContent = data.board?.in_progress?.length || 0;
+            document.getElementById('review-count').textContent = data.board?.review?.length || 0;
+            document.getElementById('done-count').textContent = data.board?.done?.length || 0;
+
+            // Update stats
+            if (data.stats) {
+                document.getElementById('stats').textContent =
+                    `${data.stats.passing}/${data.stats.total} complete (${data.stats.progress_percent}%)`;
+            }
+        }
+
+        function createTaskCard(task) {
+            const card = document.createElement('div');
+            card.className = 'bg-gray-700 rounded-lg p-3 cursor-pointer hover:bg-gray-600 transition-colors';
+            card.draggable = true;
+            card.dataset.id = task.id;
+            card.ondragstart = (e) => drag(e, task.id);
+            card.onclick = () => showTaskDetail(task);
+
+            const priorityBadge = task.priority > 50
+                ? '<span class="text-xs bg-red-500/20 text-red-400 px-1.5 py-0.5 rounded">High</span>'
+                : '';
+
+            card.innerHTML = `
+                <div class="flex items-start justify-between gap-2">
+                    <span class="font-medium text-sm">${task.name}</span>
+                    ${priorityBadge}
+                </div>
+                ${task.description ? `<p class="text-xs text-gray-400 mt-1 line-clamp-2">${task.description}</p>` : ''}
+                ${task.test_cases?.length ? `<div class="text-xs text-gray-500 mt-2">${task.test_cases.length} test cases</div>` : ''}
+            `;
+
+            return card;
+        }
+
+        // Drag and drop
+        function drag(event, taskId) {
+            event.dataTransfer.setData('taskId', taskId);
+            event.target.classList.add('dragging');
+        }
+
+        function allowDrop(event) {
+            event.preventDefault();
+            event.currentTarget.classList.add('drag-over');
+        }
+
+        async function drop(event, newStatus) {
+            event.preventDefault();
+            event.currentTarget.classList.remove('drag-over');
+
+            const taskId = event.dataTransfer.getData('taskId');
+            document.querySelector('.dragging')?.classList.remove('dragging');
+
+            try {
+                await fetch(`${API_BASE}/task/${taskId}/move`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ status: newStatus })
+                });
+                refreshBoard();
+            } catch (error) {
+                console.error('Failed to move task:', error);
+            }
+        }
+
+        // Task modals
+        function showAddTask() {
+            document.getElementById('add-task-modal').classList.remove('hidden');
+            document.getElementById('add-task-modal').classList.add('flex');
+        }
+
+        function hideAddTask() {
+            document.getElementById('add-task-modal').classList.add('hidden');
+            document.getElementById('add-task-modal').classList.remove('flex');
+        }
+
+        async function addTask(event) {
+            event.preventDefault();
+
+            const task = {
+                name: document.getElementById('task-name').value,
+                description: document.getElementById('task-desc').value,
+                test_cases: document.getElementById('task-tests').value.split('\n').filter(t => t.trim()),
+                priority: parseInt(document.getElementById('task-priority').value) || 0
+            };
+
+            try {
+                await fetch(`${API_BASE}/task`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(task)
+                });
+                hideAddTask();
+                refreshBoard();
+                // Clear form
+                document.getElementById('task-name').value = '';
+                document.getElementById('task-desc').value = '';
+                document.getElementById('task-tests').value = '';
+                document.getElementById('task-priority').value = '0';
+            } catch (error) {
+                console.error('Failed to add task:', error);
+            }
+        }
+
+        function showTaskDetail(task) {
+            currentTask = task;
+            document.getElementById('detail-name').textContent = task.name;
+            document.getElementById('detail-content').innerHTML = `
+                <div>
+                    <label class="text-xs text-gray-500">Status</label>
+                    <p class="text-sm">${task.status}</p>
+                </div>
+                ${task.description ? `
+                <div>
+                    <label class="text-xs text-gray-500">Description</label>
+                    <p class="text-sm">${task.description}</p>
+                </div>
+                ` : ''}
+                ${task.test_cases?.length ? `
+                <div>
+                    <label class="text-xs text-gray-500">Test Cases</label>
+                    <ul class="text-sm list-disc list-inside">
+                        ${task.test_cases.map(tc => `<li>${tc}</li>`).join('')}
+                    </ul>
+                </div>
+                ` : ''}
+                <div>
+                    <label class="text-xs text-gray-500">Priority</label>
+                    <p class="text-sm">${task.priority}</p>
+                </div>
+            `;
+            document.getElementById('task-detail-modal').classList.remove('hidden');
+            document.getElementById('task-detail-modal').classList.add('flex');
+        }
+
+        function hideTaskDetail() {
+            document.getElementById('task-detail-modal').classList.add('hidden');
+            document.getElementById('task-detail-modal').classList.remove('flex');
+            currentTask = null;
+        }
+
+        function workOnTask() {
+            if (currentTask) {
+                quickPrompt(`Help me implement: ${currentTask.name}\n\nDescription: ${currentTask.description || 'None'}\n\nTest cases:\n${currentTask.test_cases?.join('\n') || 'None'}`);
+                hideTaskDetail();
+            }
+        }
+
+        // Chat functions
+        async function sendMessage(event) {
+            event.preventDefault();
+            const input = document.getElementById('chat-input');
+            const message = input.value.trim();
+            if (!message) return;
+
+            // Add user message
+            addChatMessage(message, 'user');
+            input.value = '';
+
+            // Send to API
+            try {
+                const response = await fetch(`${API_BASE}/chat`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ message })
+                });
+                const data = await response.json();
+                addChatMessage(data.response, 'assistant');
+            } catch (error) {
+                addChatMessage('Error: Could not reach Claude', 'error');
+            }
+        }
+
+        function addChatMessage(text, role) {
+            const container = document.getElementById('chat-messages');
+            const firstMessage = container.querySelector('.text-center');
+            if (firstMessage) firstMessage.remove();
+
+            const msg = document.createElement('div');
+            msg.className = role === 'user'
+                ? 'bg-blue-600 rounded-lg p-3 ml-8'
+                : role === 'error'
+                ? 'bg-red-600/20 text-red-400 rounded-lg p-3'
+                : 'bg-gray-700 rounded-lg p-3 mr-8';
+            msg.innerHTML = `<p class="text-sm whitespace-pre-wrap">${text}</p>`;
+            container.appendChild(msg);
+            container.scrollTop = container.scrollHeight;
+        }
+
+        function quickPrompt(text) {
+            document.getElementById('chat-input').value = text;
+            document.getElementById('chat-form').dispatchEvent(new Event('submit'));
+        }
+    </script>
+</body>
+</html>

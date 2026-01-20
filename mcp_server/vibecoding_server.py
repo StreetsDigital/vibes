@@ -6,10 +6,18 @@ Enhanced version of feature_mcp_integrated.py that adds:
 1. Quality gate checks before marking features as complete
 2. Verification agent for dual-Claude review
 3. Pre-commit and post-implementation checks
+4. Gastown integration for git-backed persistence (optional)
 
 Drop this into autocoder's mcp_server/ directory.
+
+Backend modes:
+- SQLITE (default): Traditional SQLite-based feature queue
+- BEADS: Git-backed Gastown-style persistence (crash-proof)
+
+Set VIBES_USE_BEADS=true to enable git-backed mode.
 """
 
+import os
 import json
 import asyncio
 from pathlib import Path
@@ -30,6 +38,25 @@ from sqlalchemy import create_engine, Column, Integer, String, Text, Boolean
 from sqlalchemy.orm import sessionmaker, declarative_base
 from sqlalchemy.sql import func
 import random
+
+# Gastown integration for git-backed persistence
+try:
+    from gastown_integration import (
+        BeadFeatureAdapter,
+        init_kanban_system,
+        get_kanban_tools,
+        handle_kanban_tool,
+        Mayor,
+        BeadStore,
+        migrate_feature_to_bead
+    )
+    GASTOWN_AVAILABLE = True
+except ImportError:
+    GASTOWN_AVAILABLE = False
+    print("[feature_mcp] Note: Gastown integration not available")
+
+# Configuration: Use Beads (git-backed) or SQLite
+USE_BEADS = os.getenv("VIBES_USE_BEADS", "false").lower() == "true"
 
 # Import other modules
 from aleph_bridge import (
@@ -84,20 +111,32 @@ class Feature(Base):
 _db_session = None
 _project_dir: Optional[Path] = None
 _quality_runner: Optional[QualityGateRunner] = None
+_bead_adapter: Optional["BeadFeatureAdapter"] = None  # Gastown adapter
+_use_beads: bool = False  # Runtime flag for backend selection
 
 
 def init_database(project_dir: str) -> None:
-    """Initialize database connection."""
-    global _db_session, _project_dir, _quality_runner
-    
+    """Initialize database connection (SQLite or Beads)."""
+    global _db_session, _project_dir, _quality_runner, _bead_adapter, _use_beads
+
     _project_dir = Path(project_dir)
-    db_path = _project_dir / "features.db"
-    engine = create_engine(f"sqlite:///{db_path}")
-    Base.metadata.create_all(engine)
-    Session = sessionmaker(bind=engine)
-    _db_session = Session()
-    
-    # Initialize quality runner
+    _use_beads = USE_BEADS and GASTOWN_AVAILABLE
+
+    if _use_beads:
+        # Use git-backed Beads (Gastown mode)
+        print(f"[feature_mcp] Using git-backed Beads (Gastown mode)")
+        _bead_adapter = BeadFeatureAdapter(_project_dir)
+        init_kanban_system(str(_project_dir))
+    else:
+        # Use traditional SQLite
+        print(f"[feature_mcp] Using SQLite backend")
+        db_path = _project_dir / "features.db"
+        engine = create_engine(f"sqlite:///{db_path}")
+        Base.metadata.create_all(engine)
+        Session = sessionmaker(bind=engine)
+        _db_session = Session()
+
+    # Initialize quality runner (used by both backends)
     _quality_runner = QualityGateRunner(_project_dir)
 
 
@@ -107,16 +146,23 @@ def init_database(project_dir: str) -> None:
 
 def feature_get_stats() -> Dict[str, Any]:
     """Get feature statistics."""
+    # Route to Beads backend if enabled
+    if _use_beads and _bead_adapter:
+        result = _bead_adapter.get_stats()
+        result["backend"] = "beads"
+        return result
+
+    # SQLite backend
     if _db_session is None:
         return {"error": "Database not initialized"}
-    
+
     total = _db_session.query(Feature).count()
     passing = _db_session.query(Feature).filter(Feature.status == "passing").count()
     pending = _db_session.query(Feature).filter(Feature.status == "pending").count()
     in_progress = _db_session.query(Feature).filter(Feature.status == "in_progress").count()
     skipped = _db_session.query(Feature).filter(Feature.status == "skipped").count()
     needs_review = _db_session.query(Feature).filter(Feature.status == "needs_review").count()
-    
+
     return {
         "total": total,
         "passing": passing,
@@ -124,20 +170,29 @@ def feature_get_stats() -> Dict[str, Any]:
         "in_progress": in_progress,
         "skipped": skipped,
         "needs_review": needs_review,
-        "progress_percent": round((passing / total * 100) if total > 0 else 0, 1)
+        "progress_percent": round((passing / total * 100) if total > 0 else 0, 1),
+        "backend": "sqlite"
     }
 
 
 def feature_get_next() -> Dict[str, Any]:
     """Get the next feature to implement."""
+    # Route to Beads backend if enabled
+    if _use_beads and _bead_adapter:
+        result = _bead_adapter.get_next()
+        if "id" in result:
+            result["backend"] = "beads"
+        return result
+
+    # SQLite backend
     if _db_session is None:
         return {"error": "Database not initialized"}
-    
+
     # First check for in_progress features
     in_progress = _db_session.query(Feature).filter(
         Feature.status == "in_progress"
     ).first()
-    
+
     if in_progress:
         return {
             "id": in_progress.id,
@@ -145,14 +200,15 @@ def feature_get_next() -> Dict[str, Any]:
             "description": in_progress.description,
             "test_cases": json.loads(in_progress.test_cases) if in_progress.test_cases else [],
             "status": "in_progress",
-            "note": "Resuming in-progress feature"
+            "note": "Resuming in-progress feature",
+            "backend": "sqlite"
         }
-    
+
     # Check for features needing review
     needs_review = _db_session.query(Feature).filter(
         Feature.status == "needs_review"
     ).first()
-    
+
     if needs_review:
         return {
             "id": needs_review.id,
@@ -161,85 +217,106 @@ def feature_get_next() -> Dict[str, Any]:
             "test_cases": json.loads(needs_review.test_cases) if needs_review.test_cases else [],
             "status": "needs_review",
             "verification_notes": needs_review.verification_notes,
-            "note": "Feature needs review before marking complete"
+            "note": "Feature needs review before marking complete",
+            "backend": "sqlite"
         }
-    
+
     # Get next pending feature by priority
     next_feature = _db_session.query(Feature).filter(
         Feature.status == "pending"
     ).order_by(Feature.priority.desc(), Feature.id).first()
-    
+
     if next_feature:
         # Mark as in_progress
         next_feature.status = "in_progress"
         _db_session.commit()
-        
+
         return {
             "id": next_feature.id,
             "name": next_feature.name,
             "description": next_feature.description,
             "test_cases": json.loads(next_feature.test_cases) if next_feature.test_cases else [],
-            "status": "in_progress"
+            "status": "in_progress",
+            "backend": "sqlite"
         }
-    
+
     return {"message": "All features complete!", "remaining": 0}
 
 
 def feature_mark_passing(
-    feature_id: int, 
+    feature_id: Any,  # Can be int (SQLite) or str (Beads)
     skip_verification: bool = False
 ) -> Dict[str, Any]:
     """
     Mark a feature as passing.
-    
+
     By default, runs quality checks before marking complete.
     Set skip_verification=True to bypass (not recommended).
     """
-    if _db_session is None:
-        return {"error": "Database not initialized"}
-    
-    feature = _db_session.query(Feature).filter(Feature.id == feature_id).first()
-    
-    if not feature:
-        return {"error": f"Feature {feature_id} not found"}
-    
-    # Run quality checks unless skipped
+    # Run quality checks first (shared by both backends)
+    quality_result = None
     if not skip_verification and _quality_runner:
         quality_result = _quality_runner.run_quick_checks()
-        
-        if quality_result.get("status") == "failed":
-            # Don't mark as passing, set to needs_review
-            feature.status = "needs_review"
-            feature.verification_status = "failed"
-            feature.verification_notes = json.dumps(quality_result)
-            _db_session.commit()
-            
-            return {
-                "success": False,
-                "feature_id": feature_id,
-                "name": feature.name,
-                "new_status": "needs_review",
-                "quality_result": quality_result,
-                "message": "Quality checks failed. Fix issues before marking complete."
-            }
-    
+
+    # Route to Beads backend if enabled
+    if _use_beads and _bead_adapter:
+        result = _bead_adapter.mark_passing(
+            feature_id,
+            skip_verification=skip_verification,
+            quality_result=quality_result
+        )
+        if "success" in result:
+            result["backend"] = "beads"
+        # Trigger Aleph refresh on success
+        if result.get("success") and _project_dir:
+            on_feature_complete(str(_project_dir), feature_id)
+        return result
+
+    # SQLite backend
+    if _db_session is None:
+        return {"error": "Database not initialized"}
+
+    feature = _db_session.query(Feature).filter(Feature.id == feature_id).first()
+
+    if not feature:
+        return {"error": f"Feature {feature_id} not found"}
+
+    # Check quality result
+    if quality_result and quality_result.get("status") == "failed":
+        # Don't mark as passing, set to needs_review
+        feature.status = "needs_review"
+        feature.verification_status = "failed"
+        feature.verification_notes = json.dumps(quality_result)
+        _db_session.commit()
+
+        return {
+            "success": False,
+            "feature_id": feature_id,
+            "name": feature.name,
+            "new_status": "needs_review",
+            "quality_result": quality_result,
+            "message": "Quality checks failed. Fix issues before marking complete.",
+            "backend": "sqlite"
+        }
+
     # Mark as passing
     feature.status = "passing"
     feature.verification_status = "verified"
     _db_session.commit()
-    
+
     # Trigger Aleph refresh
     if _project_dir:
         on_feature_complete(str(_project_dir), feature_id)
-    
+
     stats = feature_get_stats()
-    
+
     return {
         "success": True,
         "feature_id": feature_id,
         "name": feature.name,
         "new_status": "passing",
-        "progress": stats
+        "progress": stats,
+        "backend": "sqlite"
     }
 
 
@@ -286,44 +363,60 @@ def feature_verify(feature_id: int) -> Dict[str, Any]:
     }
 
 
-def feature_skip(feature_id: int, reason: str = "") -> Dict[str, Any]:
+def feature_skip(feature_id: Any, reason: str = "") -> Dict[str, Any]:
     """Skip a feature (move to end of queue)."""
+    # Route to Beads backend if enabled
+    if _use_beads and _bead_adapter:
+        result = _bead_adapter.skip(feature_id, reason)
+        if "success" in result:
+            result["backend"] = "beads"
+        return result
+
+    # SQLite backend
     if _db_session is None:
         return {"error": "Database not initialized"}
-    
+
     feature = _db_session.query(Feature).filter(Feature.id == feature_id).first()
-    
+
     if not feature:
         return {"error": f"Feature {feature_id} not found"}
-    
+
     # Lower priority and reset status
     feature.status = "pending"
     feature.priority = feature.priority - 100  # Move down in queue
     _db_session.commit()
-    
+
     return {
         "success": True,
         "feature_id": feature_id,
         "name": feature.name,
         "reason": reason,
-        "new_priority": feature.priority
+        "new_priority": feature.priority,
+        "backend": "sqlite"
     }
 
 
 def feature_get_for_regression(count: int = 3) -> Dict[str, Any]:
     """Get random passing features for regression testing."""
+    # Route to Beads backend if enabled
+    if _use_beads and _bead_adapter:
+        result = _bead_adapter.get_for_regression(count)
+        result["backend"] = "beads"
+        return result
+
+    # SQLite backend
     if _db_session is None:
         return {"error": "Database not initialized"}
-    
+
     passing_features = _db_session.query(Feature).filter(
         Feature.status == "passing"
     ).all()
-    
+
     if not passing_features:
         return {"features": [], "message": "No passing features yet"}
-    
+
     selected = random.sample(passing_features, min(count, len(passing_features)))
-    
+
     return {
         "features": [
             {
@@ -332,15 +425,24 @@ def feature_get_for_regression(count: int = 3) -> Dict[str, Any]:
                 "test_cases": json.loads(f.test_cases) if f.test_cases else []
             }
             for f in selected
-        ]
+        ],
+        "backend": "sqlite"
     }
 
 
 def feature_create_bulk(features: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Create multiple features at once (used by initializer)."""
+    # Route to Beads backend if enabled
+    if _use_beads and _bead_adapter:
+        result = _bead_adapter.create_bulk(features)
+        if "success" in result:
+            result["backend"] = "beads"
+        return result
+
+    # SQLite backend
     if _db_session is None:
         return {"error": "Database not initialized"}
-    
+
     created = []
     for i, f in enumerate(features):
         feature = Feature(
@@ -352,13 +454,14 @@ def feature_create_bulk(features: List[Dict[str, Any]]) -> Dict[str, Any]:
         )
         _db_session.add(feature)
         created.append(feature.name)
-    
+
     _db_session.commit()
-    
+
     return {
         "success": True,
         "created_count": len(created),
-        "features": created
+        "features": created,
+        "backend": "sqlite"
     }
 
 
@@ -527,11 +630,16 @@ async def run_mcp_server(project_dir: str):
     
     # Combine all tools
     all_tools = (
-        get_feature_tools() + 
-        get_aleph_tools() + 
+        get_feature_tools() +
+        get_aleph_tools() +
         get_subagent_tools() +
         get_quality_tools()
     )
+
+    # Add kanban tools if using Beads backend
+    if _use_beads and GASTOWN_AVAILABLE:
+        all_tools = all_tools + get_kanban_tools()
+        print("[feature_mcp] Kanban tools enabled (Beads mode)")
     
     @server.list_tools()
     async def list_tools() -> List[Tool]:
@@ -551,13 +659,15 @@ async def run_mcp_server(project_dir: str):
             result = handle_aleph_tool(name, arguments)
         elif name.startswith("quality_"):
             result = handle_quality_tool(name, arguments)
+        elif name.startswith("kanban_") and _use_beads and GASTOWN_AVAILABLE:
+            result = handle_kanban_tool(name, arguments)
         elif name.startswith("feature_") and name not in ["feature_discuss", "feature_assumptions", "feature_research"]:
             result = handle_feature_tool(name, arguments)
         elif name.startswith("subagent_") or name in ["feature_discuss", "feature_assumptions", "feature_research"]:
             result = handle_subagent_tool(name, arguments)
         else:
             result = {"error": f"Unknown tool: {name}"}
-        
+
         return [TextContent(type="text", text=json.dumps(result, indent=2))]
     
     # Run server

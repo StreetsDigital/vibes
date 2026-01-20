@@ -1,0 +1,186 @@
+version: "3.8"
+
+# Vibes Stack - Full Deployment
+# ==============================
+# Docker Compose for running the complete vibes stack:
+# - Caddy (reverse proxy + automatic SSL)
+# - Vibe-Kanban (visual task management)
+# - Vibes Dashboard (activity monitoring)
+# - Ollama (optional local LLM)
+#
+# Usage:
+#   cp .env.example .env
+#   # Edit .env with your domain and API keys
+#   docker compose up -d
+
+services:
+  # ===========================================
+  # Reverse Proxy (Caddy)
+  # ===========================================
+  caddy:
+    image: caddy:2-alpine
+    container_name: vibes-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    environment:
+      - DOMAIN=${DOMAIN:-localhost}
+    networks:
+      - vibes-network
+    depends_on:
+      - frontend
+      - dashboard
+
+  # ===========================================
+  # Vibes Frontend (Kanban + Claude Chat)
+  # ===========================================
+  frontend:
+    build:
+      context: ..
+      dockerfile: frontend/Dockerfile
+    container_name: vibes-frontend
+    restart: unless-stopped
+    environment:
+      - VIBES_USE_BEADS=true
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+    volumes:
+      - projects:/projects
+    networks:
+      - vibes-network
+    expose:
+      - "3000"
+
+  # ===========================================
+  # Vibe-Kanban (Alternative - if you prefer)
+  # ===========================================
+  # kanban:
+  #   image: node:20-alpine
+  #   container_name: vibes-kanban
+  #   restart: unless-stopped
+  #   working_dir: /app
+  #   command: sh -c "npm install -g vibe-kanban && vibe-kanban serve --host 0.0.0.0 --port 3000"
+  #   environment:
+  #     - NODE_ENV=production
+  #     - VIBES_USE_BEADS=true
+  #   volumes:
+  #     - projects:/projects
+  #     - kanban_data:/app/.vibe-kanban
+  #   networks:
+  #     - vibes-network
+  #   expose:
+  #     - "3000"
+
+  # ===========================================
+  # Vibes Dashboard (Activity Monitoring)
+  # ===========================================
+  dashboard:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.dashboard
+    container_name: vibes-dashboard
+    restart: unless-stopped
+    environment:
+      - DASHBOARD_PORT=8080
+      - ACTIVITY_LOG=/data/logs/activity.jsonl
+    volumes:
+      - dashboard_data:/data
+      - projects:/projects:ro
+    networks:
+      - vibes-network
+    expose:
+      - "8080"
+
+  # ===========================================
+  # Ollama (Local LLM - Optional)
+  # ===========================================
+  ollama:
+    image: ollama/ollama:latest
+    container_name: vibes-ollama
+    restart: unless-stopped
+    profiles:
+      - with-ollama
+    volumes:
+      - ollama_data:/root/.ollama
+    networks:
+      - vibes-network
+    expose:
+      - "11434"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  # ===========================================
+  # PostgreSQL (for Kanban persistence)
+  # ===========================================
+  postgres:
+    image: postgres:16-alpine
+    container_name: vibes-postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-vibes}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-vibes_secret}
+      - POSTGRES_DB=${POSTGRES_DB:-vibes_kanban}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - vibes-network
+    expose:
+      - "5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-vibes}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ===========================================
+  # Redis (for caching/sessions)
+  # ===========================================
+  redis:
+    image: redis:7-alpine
+    container_name: vibes-redis
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    networks:
+      - vibes-network
+    expose:
+      - "6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+# ===========================================
+# Networks
+# ===========================================
+networks:
+  vibes-network:
+    driver: bridge
+
+# ===========================================
+# Volumes
+# ===========================================
+volumes:
+  caddy_data:
+  caddy_config:
+  kanban_data:
+  dashboard_data:
+  ollama_data:
+  postgres_data:
+  redis_data:
+  projects:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${PROJECTS_DIR:-/home/vibes/projects}

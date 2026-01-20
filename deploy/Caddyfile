@@ -1,0 +1,69 @@
+# Vibes Stack - Caddy Configuration
+# ===================================
+# Automatic HTTPS with Let's Encrypt
+# Reverse proxy to internal services
+#
+# For local development, use localhost
+# For production, set DOMAIN in .env
+
+# Global options
+{
+	# Email for Let's Encrypt notifications
+	email {$ACME_EMAIL:admin@example.com}
+
+	# Staging for testing (uncomment to avoid rate limits)
+	# acme_ca https://acme-staging-v02.api.letsencrypt.org/directory
+}
+
+# Main domain - Vibes Frontend (Kanban + Claude Chat)
+{$DOMAIN:localhost} {
+	# Frontend app
+	reverse_proxy frontend:3000
+
+	# Security headers
+	header {
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy strict-origin-when-cross-origin
+	}
+
+	# Logging
+	log {
+		output file /data/access.log
+		format json
+	}
+}
+
+# Dashboard subdomain
+dash.{$DOMAIN:localhost} {
+	reverse_proxy dashboard:8080
+
+	header {
+		X-Content-Type-Options nosniff
+		X-Frame-Options SAMEORIGIN
+	}
+}
+
+# API subdomain (for future use)
+api.{$DOMAIN:localhost} {
+	# MCP server or other APIs
+	reverse_proxy kanban:3000 {
+		header_up X-Forwarded-Proto {scheme}
+	}
+}
+
+# Ollama API (if enabled)
+ollama.{$DOMAIN:localhost} {
+	# Basic auth for Ollama access
+	basicauth {
+		{$OLLAMA_USER:admin} {$OLLAMA_HASH:JDJhJDE0JDdQa3lQWnFQTnFQTnFQTnFQTnFQTnFQTnFQTnFQTnFQTnFQTnFQTnFQTnFQTnFQTnFQ}
+	}
+
+	reverse_proxy ollama:11434
+}
+
+# Health check endpoint
+:8888 {
+	respond /health 200
+	respond /ready 200
+}
