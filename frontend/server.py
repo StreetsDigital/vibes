@@ -32,7 +32,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "mcp_server"))
 
 from gastown_integration import BeadStore, Bead, BeadStatus, Mayor
 
-app = Flask(__name__, static_folder='.')
+# Serve from React build (frontend-react/dist)
+STATIC_DIR = Path(__file__).parent.parent / "frontend-react" / "dist"
+app = Flask(__name__, static_folder=str(STATIC_DIR))
 
 # Global state
 _project_dir: Path = None
@@ -102,14 +104,19 @@ def init_app(project_dir: str, projects_root: str = None):
 @requires_auth
 def index():
     """Serve the main UI."""
-    return send_from_directory('.', 'index.html')
+    return send_from_directory(STATIC_DIR, 'index.html')
 
 
 @app.route('/<path:path>')
 @requires_auth
 def static_files(path):
     """Serve static files."""
-    return send_from_directory('.', path)
+    # Try to serve file from React build, fallback to index.html for SPA routing
+    file_path = STATIC_DIR / path
+    if file_path.exists():
+        return send_from_directory(STATIC_DIR, path)
+    # SPA fallback - serve index.html for client-side routing
+    return send_from_directory(STATIC_DIR, 'index.html')
 
 
 # ===========================================
