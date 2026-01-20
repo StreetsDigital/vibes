@@ -20,10 +20,12 @@ import sys
 import json
 import subprocess
 import asyncio
+import hashlib
+import secrets
 from pathlib import Path
 from datetime import datetime
-from flask import Flask, request, jsonify, send_from_directory
-from flask_cors import CORS
+from functools import wraps
+from flask import Flask, request, jsonify, send_from_directory, Response
 
 # Add mcp_server to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "mcp_server"))
@@ -31,12 +33,44 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "mcp_server"))
 from gastown_integration import BeadStore, Bead, BeadStatus, Mayor
 
 app = Flask(__name__, static_folder='.')
-CORS(app)
 
 # Global state
 _project_dir: Path = None
 _bead_store: BeadStore = None
 _mayor: Mayor = None
+
+# Auth config (set via environment or args)
+AUTH_USERNAME = os.environ.get("VIBES_USERNAME", "")
+AUTH_PASSWORD = os.environ.get("VIBES_PASSWORD", "")
+
+
+def check_auth(username: str, password: str) -> bool:
+    """Check if username/password is valid."""
+    if not AUTH_USERNAME or not AUTH_PASSWORD:
+        return True  # No auth configured
+    return secrets.compare_digest(username, AUTH_USERNAME) and \
+           secrets.compare_digest(password, AUTH_PASSWORD)
+
+
+def authenticate():
+    """Send 401 response for authentication."""
+    return Response(
+        'Authentication required',
+        401,
+        {'WWW-Authenticate': 'Basic realm="Vibes"'}
+    )
+
+
+def requires_auth(f):
+    """Decorator for routes that require authentication."""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if AUTH_USERNAME and AUTH_PASSWORD:
+            auth = request.authorization
+            if not auth or not check_auth(auth.username, auth.password):
+                return authenticate()
+        return f(*args, **kwargs)
+    return decorated
 
 
 def init_app(project_dir: str):
@@ -56,12 +90,14 @@ def init_app(project_dir: str):
 # ===========================================
 
 @app.route('/')
+@requires_auth
 def index():
     """Serve the main UI."""
     return send_from_directory('.', 'index.html')
 
 
 @app.route('/<path:path>')
+@requires_auth
 def static_files(path):
     """Serve static files."""
     return send_from_directory('.', path)
@@ -72,6 +108,7 @@ def static_files(path):
 # ===========================================
 
 @app.route('/api/board')
+@requires_auth
 def get_board():
     """Get the Kanban board state."""
     if not _bead_store:
@@ -110,6 +147,7 @@ def get_board():
 
 
 @app.route('/api/task', methods=['POST'])
+@requires_auth
 def create_task():
     """Create a new task."""
     if not _mayor:
@@ -131,6 +169,7 @@ def create_task():
 
 
 @app.route('/api/task/<task_id>')
+@requires_auth
 def get_task(task_id):
     """Get a specific task."""
     if not _bead_store:
@@ -144,6 +183,7 @@ def get_task(task_id):
 
 
 @app.route('/api/task/<task_id>/move', methods=['POST'])
+@requires_auth
 def move_task(task_id):
     """Move a task to a different column."""
     if not _bead_store:
@@ -169,6 +209,7 @@ def move_task(task_id):
 
 
 @app.route('/api/task/<task_id>', methods=['DELETE'])
+@requires_auth
 def delete_task(task_id):
     """Delete a task."""
     if not _bead_store:
@@ -182,7 +223,28 @@ def delete_task(task_id):
 # Chat API (Claude Integration)
 # ===========================================
 
+@app.route('/api/git/branch')
+@requires_auth
+def get_branch():
+    """Get current git branch."""
+    if not _project_dir:
+        return jsonify({"branch": "main"})
+
+    try:
+        result = subprocess.run(
+            ["git", "branch", "--show-current"],
+            capture_output=True,
+            text=True,
+            cwd=str(_project_dir)
+        )
+        branch = result.stdout.strip() or "main"
+        return jsonify({"branch": branch})
+    except Exception:
+        return jsonify({"branch": "main"})
+
+
 @app.route('/api/chat', methods=['POST'])
+@requires_auth
 def chat():
     """Send a message to Claude."""
     data = request.json
