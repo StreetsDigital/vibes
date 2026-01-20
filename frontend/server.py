@@ -223,6 +223,49 @@ def delete_task(task_id):
 # Chat API (Claude Integration)
 # ===========================================
 
+def get_chat_file() -> Path:
+    """Get path to chat history file."""
+    if not _project_dir:
+        return None
+    vibes_dir = _project_dir / ".git" / "vibes"
+    vibes_dir.mkdir(parents=True, exist_ok=True)
+    return vibes_dir / "chat.json"
+
+
+def load_chat_history() -> list:
+    """Load chat history from file."""
+    chat_file = get_chat_file()
+    if not chat_file or not chat_file.exists():
+        return []
+    try:
+        return json.loads(chat_file.read_text())
+    except:
+        return []
+
+
+def save_chat_history(messages: list):
+    """Save chat history to file."""
+    chat_file = get_chat_file()
+    if chat_file:
+        chat_file.write_text(json.dumps(messages, indent=2))
+
+
+@app.route('/api/chat/history')
+@requires_auth
+def get_chat_history():
+    """Get chat history."""
+    messages = load_chat_history()
+    return jsonify({"messages": messages})
+
+
+@app.route('/api/chat/history', methods=['DELETE'])
+@requires_auth
+def clear_chat_history():
+    """Clear chat history."""
+    save_chat_history([])
+    return jsonify({"success": True})
+
+
 @app.route('/api/git/branch')
 @requires_auth
 def get_branch():
@@ -253,12 +296,33 @@ def chat():
     if not message:
         return jsonify({"error": "No message provided"}), 400
 
+    # Load existing history
+    history = load_chat_history()
+
+    # Add user message
+    history.append({
+        "role": "user",
+        "content": message,
+        "timestamp": datetime.now().isoformat()
+    })
+
     # Build context from current board state
     context = build_chat_context()
 
     # Run Claude CLI with the message
     try:
         response = run_claude_prompt(message, context)
+
+        # Add assistant response
+        history.append({
+            "role": "assistant",
+            "content": response,
+            "timestamp": datetime.now().isoformat()
+        })
+
+        # Save history (keep last 100 messages)
+        save_chat_history(history[-100:])
+
         return jsonify({"response": response})
     except Exception as e:
         return jsonify({"error": str(e), "response": f"Error: {str(e)}"}), 500

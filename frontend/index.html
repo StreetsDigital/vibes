@@ -234,6 +234,9 @@
                 <button onclick="quickPrompt('Show git status'); hideActionMenu()" class="w-full text-left px-4 py-3 hover:bg-gray-700 rounded-lg active:bg-gray-600">
                     Git status
                 </button>
+                <button onclick="clearChat(); hideActionMenu()" class="w-full text-left px-4 py-3 hover:bg-gray-700 rounded-lg active:bg-gray-600 text-red-400">
+                    Clear chat history
+                </button>
                 <button onclick="hideActionMenu()" class="w-full text-left px-4 py-3 text-gray-400 hover:bg-gray-700 rounded-lg">
                     Cancel
                 </button>
@@ -298,6 +301,7 @@
         document.addEventListener('DOMContentLoaded', () => {
             refreshBoard();
             fetchBranchName();
+            loadChatHistory();
             setInterval(refreshBoard, 10000);
         });
 
@@ -661,6 +665,41 @@
         function autoResizeTextarea(el) {
             el.style.height = 'auto';
             el.style.height = Math.min(el.scrollHeight, 120) + 'px';
+        }
+
+        // Load chat history from server
+        async function loadChatHistory() {
+            try {
+                const response = await fetch(`${API_BASE}/chat/history`);
+                const data = await response.json();
+                if (data.messages && data.messages.length > 0) {
+                    const container = document.getElementById('chat-messages');
+                    const firstMessage = container.querySelector('.text-center');
+                    if (firstMessage) firstMessage.remove();
+
+                    data.messages.forEach(msg => {
+                        addChatMessage(msg.content, msg.role);
+                    });
+                }
+            } catch (error) {
+                console.error('Failed to load chat history:', error);
+            }
+        }
+
+        // Clear chat history
+        async function clearChat() {
+            if (confirm('Clear chat history?')) {
+                try {
+                    await fetch(`${API_BASE}/chat/history`, { method: 'DELETE' });
+                    document.getElementById('chat-messages').innerHTML = `
+                        <div class="text-gray-500 text-sm text-center py-8">
+                            Start a conversation with Claude
+                        </div>
+                    `;
+                } catch (error) {
+                    console.error('Failed to clear chat:', error);
+                }
+            }
         }
     </script>
 </body>
