@@ -1,0 +1,24 @@
+# Vibes Dashboard Dockerfile
+# ==========================
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install dependencies
+RUN pip install --no-cache-dir flask
+
+# Copy dashboard code
+COPY dashboard/ /app/dashboard/
+COPY mcp_server/ /app/mcp_server/
+
+# Create data directories
+RUN mkdir -p /data/logs
+
+# Environment
+ENV PYTHONUNBUFFERED=1
+ENV DASHBOARD_PORT=8080
+
+EXPOSE 8080
+
+# Run dashboard
+CMD ["python", "dashboard/server.py"]
