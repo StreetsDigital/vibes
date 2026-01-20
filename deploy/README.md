@@ -20,13 +20,13 @@ SSH into your server and run:
 
 ```bash
 # Download and run setup script
-curl -fsSL https://raw.githubusercontent.com/StreetsDigital/vibes/claude/evaluate-pageindex-zFMFu/deploy/setup-server.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/StreetsDigital/vibes/master/deploy/setup-server.sh | sudo bash
 ```
 
 Or manually:
 
 ```bash
-git clone -b claude/evaluate-pageindex-zFMFu https://github.com/StreetsDigital/vibes.git
+git clone https://github.com/StreetsDigital/vibes.git
 cd vibes/deploy
 sudo ./setup-server.sh
 ```
