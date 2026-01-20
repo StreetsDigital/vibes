@@ -9,9 +9,6 @@
     <style>
         .drag-over { background-color: rgba(59, 130, 246, 0.1); }
         .dragging { opacity: 0.5; }
-        [data-loading] { display: none; }
-        .htmx-request [data-loading] { display: block; }
-        .htmx-request [data-content] { opacity: 0.5; }
 
         /* Chat content styling */
         .chat-content { word-break: break-word; }
@@ -32,6 +29,15 @@
 
         /* Active tab indicator */
         .tab-active { border-bottom: 2px solid #3b82f6; color: #3b82f6; }
+
+        /* Pulse animation for loading */
+        @keyframes pulse-dot {
+            0%, 100% { opacity: 0.4; }
+            50% { opacity: 1; }
+        }
+        .loading-dot { animation: pulse-dot 1.4s ease-in-out infinite; }
+        .loading-dot:nth-child(2) { animation-delay: 0.2s; }
+        .loading-dot:nth-child(3) { animation-delay: 0.4s; }
     </style>
 </head>
 <body class="bg-gray-900 text-gray-100 min-h-screen flex flex-col">
@@ -120,10 +126,20 @@
         </main>
 
         <!-- Claude Chat Sidebar -->
-        <aside id="view-chat" class="hidden md:flex w-full md:w-96 bg-gray-800 md:border-l border-gray-700 flex-col h-full">
-            <div class="p-4 border-b border-gray-700 flex-shrink-0">
-                <h2 class="font-semibold text-gray-300">Claude</h2>
-                <p class="text-xs text-gray-500">Ask about tasks or get help</p>
+        <aside id="view-chat" class="hidden md:flex w-full md:w-96 bg-gray-900 md:bg-gray-800 md:border-l border-gray-700 flex-col h-full">
+            <!-- Chat Header - Claude Code style -->
+            <div class="bg-gray-800 rounded-xl mx-3 mt-3 p-3 flex items-center justify-between flex-shrink-0">
+                <div class="flex-1 min-w-0">
+                    <p id="branch-name" class="text-sm text-gray-300 truncate">main</p>
+                </div>
+                <button onclick="quickPrompt('Create a PR for current changes')" class="ml-2 px-3 py-1 text-sm font-medium hover:bg-gray-700 rounded">
+                    View PR
+                </button>
+                <button onclick="showActionMenu()" class="ml-1 p-1.5 hover:bg-gray-700 rounded">
+                    <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                        <path d="M10 6a2 2 0 110-4 2 2 0 010 4zM10 12a2 2 0 110-4 2 2 0 010 4zM10 18a2 2 0 110-4 2 2 0 010 4z"/>
+                    </svg>
+                </button>
             </div>
 
             <!-- Chat Messages -->
@@ -133,65 +149,109 @@
                 </div>
             </div>
 
-            <!-- Chat Input -->
-            <div class="p-3 border-t border-gray-700 flex-shrink-0 safe-bottom">
-                <form id="chat-form" onsubmit="sendMessage(event)" class="flex flex-col gap-2">
-                    <textarea
-                        id="chat-input"
-                        placeholder="Ask Claude... (Shift+Enter for new line)"
-                        rows="3"
-                        class="w-full bg-gray-700 rounded-lg px-4 py-3 text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none overflow-y-auto"
-                        style="min-height: 80px; max-height: 200px;"
-                        onkeydown="handleChatKeydown(event)"
-                        oninput="autoResizeTextarea(this)"
-                    ></textarea>
-                    <div class="flex justify-between items-center">
-                        <div class="flex gap-1 flex-wrap">
-                            <button type="button" onclick="quickPrompt('Summarize current tasks')" class="text-xs px-2 py-1.5 bg-gray-700 rounded hover:bg-gray-600 active:bg-gray-500">
-                                Summarize
+            <!-- Chat Input - Claude Code style -->
+            <div class="p-3 flex-shrink-0 safe-bottom">
+                <div class="bg-gray-800 rounded-xl p-3">
+                    <form id="chat-form" onsubmit="sendMessage(event)">
+                        <textarea
+                            id="chat-input"
+                            placeholder="Add feedback..."
+                            rows="1"
+                            class="w-full bg-transparent text-base focus:outline-none resize-none overflow-hidden"
+                            style="min-height: 24px; max-height: 120px;"
+                            onkeydown="handleChatKeydown(event)"
+                            oninput="autoResizeTextarea(this)"
+                        ></textarea>
+                    </form>
+
+                    <!-- Bottom toolbar -->
+                    <div class="flex items-center justify-between mt-3 pt-3 border-t border-gray-700">
+                        <div class="flex items-center gap-1">
+                            <span id="repo-badge" class="text-xs bg-gray-700 px-2 py-1 rounded-full text-gray-400">
+                                StreetsDigital/vibes
+                            </span>
+                        </div>
+                        <div class="flex items-center gap-1">
+                            <!-- Add task -->
+                            <button onclick="showAddTask()" class="p-2 hover:bg-gray-700 rounded-lg active:bg-gray-600" title="Add task">
+                                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+                                </svg>
                             </button>
-                            <button type="button" onclick="quickPrompt('What should I work on next?')" class="text-xs px-2 py-1.5 bg-gray-700 rounded hover:bg-gray-600 active:bg-gray-500">
-                                Next task
+                            <!-- Commit -->
+                            <button onclick="quickPrompt('/commit')" class="p-2 hover:bg-gray-700 rounded-lg active:bg-gray-600" title="Commit">
+                                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+                                </svg>
                             </button>
-                            <button type="button" onclick="quickPrompt('Run quality checks')" class="text-xs px-2 py-1.5 bg-gray-700 rounded hover:bg-gray-600 active:bg-gray-500">
-                                Quality
+                            <!-- PR -->
+                            <button onclick="quickPrompt('Create a pull request')" class="p-2 hover:bg-gray-700 rounded-lg active:bg-gray-600" title="Create PR">
+                                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"/>
+                                </svg>
+                            </button>
+                            <!-- Send / Stop -->
+                            <button id="send-btn" onclick="submitOrStop()" class="p-2 bg-white text-gray-900 rounded-lg hover:bg-gray-200 active:bg-gray-300 ml-1" title="Send">
+                                <svg id="send-icon" class="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                                    <path d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z"/>
+                                </svg>
+                                <svg id="stop-icon" class="w-5 h-5 hidden" fill="currentColor" viewBox="0 0 20 20">
+                                    <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8 7a1 1 0 00-1 1v4a1 1 0 001 1h4a1 1 0 001-1V8a1 1 0 00-1-1H8z" clip-rule="evenodd"/>
+                                </svg>
                             </button>
                         </div>
-                        <button type="submit" class="px-5 py-2 bg-blue-600 rounded-lg hover:bg-blue-500 active:bg-blue-700 text-sm font-medium">
-                            Send
-                        </button>
                     </div>
-                </form>
+                </div>
             </div>
         </aside>
     </div>
 
+    <!-- Action Menu Modal -->
+    <div id="action-menu" class="fixed inset-0 bg-black/50 hidden items-end justify-center z-50" onclick="hideActionMenu()">
+        <div class="bg-gray-800 rounded-t-2xl w-full max-w-lg p-4 safe-bottom" onclick="event.stopPropagation()">
+            <div class="w-12 h-1 bg-gray-600 rounded-full mx-auto mb-4"></div>
+            <div class="space-y-1">
+                <button onclick="quickPrompt('Summarize current tasks'); hideActionMenu()" class="w-full text-left px-4 py-3 hover:bg-gray-700 rounded-lg active:bg-gray-600">
+                    Summarize tasks
+                </button>
+                <button onclick="quickPrompt('What should I work on next?'); hideActionMenu()" class="w-full text-left px-4 py-3 hover:bg-gray-700 rounded-lg active:bg-gray-600">
+                    Suggest next task
+                </button>
+                <button onclick="quickPrompt('/verify'); hideActionMenu()" class="w-full text-left px-4 py-3 hover:bg-gray-700 rounded-lg active:bg-gray-600">
+                    Run quality checks
+                </button>
+                <button onclick="quickPrompt('Show git status'); hideActionMenu()" class="w-full text-left px-4 py-3 hover:bg-gray-700 rounded-lg active:bg-gray-600">
+                    Git status
+                </button>
+                <button onclick="hideActionMenu()" class="w-full text-left px-4 py-3 text-gray-400 hover:bg-gray-700 rounded-lg">
+                    Cancel
+                </button>
+            </div>
+        </div>
+    </div>
+
     <!-- Add Task Modal -->
     <div id="add-task-modal" class="fixed inset-0 bg-black/50 hidden items-center justify-center z-50 p-4">
-        <div class="bg-gray-800 rounded-lg p-5 w-full max-w-md max-h-[90vh] overflow-y-auto">
+        <div class="bg-gray-800 rounded-xl p-5 w-full max-w-md max-h-[90vh] overflow-y-auto">
             <h3 class="text-lg font-semibold mb-4">Add New Task</h3>
             <form onsubmit="addTask(event)">
                 <div class="space-y-4">
                     <div>
                         <label class="block text-sm text-gray-400 mb-1">Name</label>
-                        <input type="text" id="task-name" required class="w-full bg-gray-700 rounded px-3 py-3 text-base focus:outline-none focus:ring-2 focus:ring-blue-500">
+                        <input type="text" id="task-name" required class="w-full bg-gray-700 rounded-lg px-3 py-3 text-base focus:outline-none focus:ring-2 focus:ring-blue-500">
                     </div>
                     <div>
                         <label class="block text-sm text-gray-400 mb-1">Description</label>
-                        <textarea id="task-desc" rows="3" class="w-full bg-gray-700 rounded px-3 py-3 text-base focus:outline-none focus:ring-2 focus:ring-blue-500"></textarea>
+                        <textarea id="task-desc" rows="3" class="w-full bg-gray-700 rounded-lg px-3 py-3 text-base focus:outline-none focus:ring-2 focus:ring-blue-500"></textarea>
                     </div>
                     <div>
                         <label class="block text-sm text-gray-400 mb-1">Test Cases (one per line)</label>
-                        <textarea id="task-tests" rows="3" placeholder="Test case 1&#10;Test case 2" class="w-full bg-gray-700 rounded px-3 py-3 text-base focus:outline-none focus:ring-2 focus:ring-blue-500"></textarea>
-                    </div>
-                    <div>
-                        <label class="block text-sm text-gray-400 mb-1">Priority</label>
-                        <input type="number" id="task-priority" value="0" class="w-full bg-gray-700 rounded px-3 py-3 text-base focus:outline-none focus:ring-2 focus:ring-blue-500">
+                        <textarea id="task-tests" rows="3" placeholder="Test case 1&#10;Test case 2" class="w-full bg-gray-700 rounded-lg px-3 py-3 text-base focus:outline-none focus:ring-2 focus:ring-blue-500"></textarea>
                     </div>
                 </div>
                 <div class="flex gap-2 mt-6">
                     <button type="button" onclick="hideAddTask()" class="flex-1 px-4 py-3 bg-gray-700 rounded-lg hover:bg-gray-600 active:bg-gray-500">Cancel</button>
-                    <button type="submit" class="flex-1 px-4 py-3 bg-blue-600 rounded-lg hover:bg-blue-500 active:bg-blue-700">Add Task</button>
+                    <button type="submit" class="flex-1 px-4 py-3 bg-blue-600 rounded-lg hover:bg-blue-500 active:bg-blue-700">Add</button>
                 </div>
             </form>
         </div>
@@ -199,7 +259,7 @@
 
     <!-- Task Detail Modal -->
     <div id="task-detail-modal" class="fixed inset-0 bg-black/50 hidden items-center justify-center z-50 p-4">
-        <div class="bg-gray-800 rounded-lg p-5 w-full max-w-lg max-h-[90vh] overflow-y-auto">
+        <div class="bg-gray-800 rounded-xl p-5 w-full max-w-lg max-h-[90vh] overflow-y-auto">
             <div class="flex justify-between items-start mb-4">
                 <h3 id="detail-name" class="text-lg font-semibold pr-4"></h3>
                 <button onclick="hideTaskDetail()" class="text-gray-500 hover:text-gray-300 p-1 -mr-1">✕</button>
@@ -221,13 +281,38 @@
         const API_BASE = '/api';
         let currentTask = null;
         let currentView = 'board';
+        let isLoading = false;
 
         // Initialize
         document.addEventListener('DOMContentLoaded', () => {
             refreshBoard();
-            // Poll for updates every 10 seconds
+            fetchBranchName();
             setInterval(refreshBoard, 10000);
         });
+
+        // Fetch current branch
+        async function fetchBranchName() {
+            try {
+                const response = await fetch(`${API_BASE}/git/branch`);
+                const data = await response.json();
+                if (data.branch) {
+                    document.getElementById('branch-name').textContent = data.branch;
+                }
+            } catch (error) {
+                // Keep default
+            }
+        }
+
+        // Action menu
+        function showActionMenu() {
+            document.getElementById('action-menu').classList.remove('hidden');
+            document.getElementById('action-menu').classList.add('flex');
+        }
+
+        function hideActionMenu() {
+            document.getElementById('action-menu').classList.add('hidden');
+            document.getElementById('action-menu').classList.remove('flex');
+        }
 
         // View switching for mobile
         function showView(view) {
@@ -277,12 +362,10 @@
                 'passing': 'passing'
             };
 
-            // Clear columns
             Object.values(columns).forEach(id => {
                 document.getElementById(id).innerHTML = '';
             });
 
-            // Render tasks
             if (data.board) {
                 Object.entries(data.board).forEach(([status, tasks]) => {
                     const columnId = columns[status] || status;
@@ -295,13 +378,11 @@
                 });
             }
 
-            // Update counts
             document.getElementById('todo-count').textContent = data.board?.todo?.length || 0;
             document.getElementById('progress-count').textContent = data.board?.in_progress?.length || 0;
             document.getElementById('review-count').textContent = data.board?.review?.length || 0;
             document.getElementById('done-count').textContent = data.board?.done?.length || 0;
 
-            // Update stats
             if (data.stats) {
                 document.getElementById('stats').textContent =
                     `${data.stats.passing}/${data.stats.total} complete (${data.stats.progress_percent}%)`;
@@ -326,7 +407,7 @@
                     ${priorityBadge}
                 </div>
                 ${task.description ? `<p class="text-xs text-gray-400 mt-1 line-clamp-2">${task.description}</p>` : ''}
-                ${task.test_cases?.length ? `<div class="text-xs text-gray-500 mt-2">${task.test_cases.length} test cases</div>` : ''}
+                ${task.test_cases?.length ? `<div class="text-xs text-gray-500 mt-2">${task.test_cases.length} tests</div>` : ''}
             `;
 
             return card;
@@ -380,7 +461,7 @@
                 name: document.getElementById('task-name').value,
                 description: document.getElementById('task-desc').value,
                 test_cases: document.getElementById('task-tests').value.split('\n').filter(t => t.trim()),
-                priority: parseInt(document.getElementById('task-priority').value) || 0
+                priority: 0
             };
 
             try {
@@ -391,11 +472,9 @@
                 });
                 hideAddTask();
                 refreshBoard();
-                // Clear form
                 document.getElementById('task-name').value = '';
                 document.getElementById('task-desc').value = '';
                 document.getElementById('task-tests').value = '';
-                document.getElementById('task-priority').value = '0';
             } catch (error) {
                 console.error('Failed to add task:', error);
             }
@@ -423,10 +502,6 @@
                     </ul>
                 </div>
                 ` : ''}
-                <div>
-                    <label class="text-xs text-gray-500">Priority</label>
-                    <p class="text-sm">${task.priority}</p>
-                </div>
             `;
             document.getElementById('task-detail-modal').classList.remove('hidden');
             document.getElementById('task-detail-modal').classList.add('flex');
@@ -440,7 +515,6 @@
 
         function workOnTask() {
             if (currentTask) {
-                // Switch to chat view on mobile
                 showView('chat');
                 quickPrompt(`Help me implement: ${currentTask.name}\n\nDescription: ${currentTask.description || 'None'}\n\nTest cases:\n${currentTask.test_cases?.join('\n') || 'None'}`);
                 hideTaskDetail();
@@ -448,18 +522,42 @@
         }
 
         // Chat functions
+        function setLoading(loading) {
+            isLoading = loading;
+            const sendIcon = document.getElementById('send-icon');
+            const stopIcon = document.getElementById('stop-icon');
+            if (loading) {
+                sendIcon.classList.add('hidden');
+                stopIcon.classList.remove('hidden');
+            } else {
+                sendIcon.classList.remove('hidden');
+                stopIcon.classList.add('hidden');
+            }
+        }
+
+        function submitOrStop() {
+            if (isLoading) {
+                // Could implement abort controller here
+                setLoading(false);
+            } else {
+                document.getElementById('chat-form').dispatchEvent(new Event('submit'));
+            }
+        }
+
         async function sendMessage(event) {
             event.preventDefault();
             const input = document.getElementById('chat-input');
             const message = input.value.trim();
-            if (!message) return;
+            if (!message || isLoading) return;
 
-            // Add user message
             addChatMessage(message, 'user');
             input.value = '';
             autoResizeTextarea(input);
+            setLoading(true);
 
-            // Send to API
+            // Add loading indicator
+            const loadingId = addLoadingMessage();
+
             try {
                 const response = await fetch(`${API_BASE}/chat`, {
                     method: 'POST',
@@ -467,10 +565,36 @@
                     body: JSON.stringify({ message })
                 });
                 const data = await response.json();
+                removeLoadingMessage(loadingId);
                 addChatMessage(data.response, 'assistant');
             } catch (error) {
+                removeLoadingMessage(loadingId);
                 addChatMessage('Error: Could not reach Claude', 'error');
+            } finally {
+                setLoading(false);
             }
+        }
+
+        function addLoadingMessage() {
+            const container = document.getElementById('chat-messages');
+            const msg = document.createElement('div');
+            msg.id = 'loading-' + Date.now();
+            msg.className = 'bg-gray-700 rounded-lg p-3 mr-4 md:mr-8';
+            msg.innerHTML = `
+                <div class="flex gap-1">
+                    <span class="w-2 h-2 bg-gray-400 rounded-full loading-dot"></span>
+                    <span class="w-2 h-2 bg-gray-400 rounded-full loading-dot"></span>
+                    <span class="w-2 h-2 bg-gray-400 rounded-full loading-dot"></span>
+                </div>
+            `;
+            container.appendChild(msg);
+            container.scrollTop = container.scrollHeight;
+            return msg.id;
+        }
+
+        function removeLoadingMessage(id) {
+            const msg = document.getElementById(id);
+            if (msg) msg.remove();
         }
 
         function addChatMessage(text, role) {
@@ -485,36 +609,25 @@
                 ? 'bg-red-600/20 text-red-400 rounded-lg p-3'
                 : 'bg-gray-700 rounded-lg p-3 mr-4 md:mr-8';
 
-            // Format the text with basic markdown support
             const formatted = formatMessage(text);
             msg.innerHTML = `<div class="text-sm chat-content">${formatted}</div>`;
             container.appendChild(msg);
             container.scrollTop = container.scrollHeight;
         }
 
-        // Basic markdown formatting for chat messages
         function formatMessage(text) {
-            // Escape HTML first
             let escaped = text
                 .replace(/&/g, '&amp;')
                 .replace(/</g, '&lt;')
                 .replace(/>/g, '&gt;');
 
-            // Code blocks (```code```)
             escaped = escaped.replace(/```(\w*)\n?([\s\S]*?)```/g, (match, lang, code) => {
                 return `<pre class="bg-gray-900 rounded p-3 my-2 overflow-x-auto text-xs font-mono"><code>${code.trim()}</code></pre>`;
             });
 
-            // Inline code (`code`)
             escaped = escaped.replace(/`([^`]+)`/g, '<code class="bg-gray-900 px-1.5 py-0.5 rounded text-xs font-mono">$1</code>');
-
-            // Bold (**text**)
             escaped = escaped.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-
-            // Italic (*text*)
             escaped = escaped.replace(/\*([^*]+)\*/g, '<em>$1</em>');
-
-            // Line breaks
             escaped = escaped.replace(/\n/g, '<br>');
 
             return escaped;
@@ -527,7 +640,6 @@
             document.getElementById('chat-form').dispatchEvent(new Event('submit'));
         }
 
-        // Handle Enter to send, Shift+Enter for new line
         function handleChatKeydown(event) {
             if (event.key === 'Enter' && !event.shiftKey) {
                 event.preventDefault();
@@ -535,10 +647,9 @@
             }
         }
 
-        // Auto-resize textarea as content grows
         function autoResizeTextarea(el) {
             el.style.height = 'auto';
-            el.style.height = Math.min(el.scrollHeight, 200) + 'px';
+            el.style.height = Math.min(el.scrollHeight, 120) + 'px';
         }
     </script>
 </body>
