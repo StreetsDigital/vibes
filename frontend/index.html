@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Vibes - Task Board</title>
     <script src="https://unpkg.com/htmx.org@1.9.10"></script>
     <script src="https://cdn.tailwindcss.com"></script>
@@ -17,168 +17,200 @@
         .chat-content { word-break: break-word; }
         .chat-content pre { white-space: pre-wrap; word-wrap: break-word; }
         .chat-content code { font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace; }
+
+        /* Mobile kanban scroll */
+        .kanban-scroll {
+            -webkit-overflow-scrolling: touch;
+            scrollbar-width: none;
+        }
+        .kanban-scroll::-webkit-scrollbar { display: none; }
+
+        /* Safe area for notched phones */
+        @supports (padding-bottom: env(safe-area-inset-bottom)) {
+            .safe-bottom { padding-bottom: env(safe-area-inset-bottom); }
+        }
+
+        /* Active tab indicator */
+        .tab-active { border-bottom: 2px solid #3b82f6; color: #3b82f6; }
     </style>
 </head>
-<body class="bg-gray-900 text-gray-100 min-h-screen">
+<body class="bg-gray-900 text-gray-100 min-h-screen flex flex-col">
     <!-- Header -->
-    <header class="bg-gray-800 border-b border-gray-700 px-6 py-4">
-        <div class="flex items-center justify-between max-w-7xl mx-auto">
-            <h1 class="text-xl font-bold text-blue-400">⚡ Vibes</h1>
-            <div class="flex items-center gap-4">
-                <span id="stats" class="text-sm text-gray-400">Loading...</span>
-                <button onclick="refreshBoard()" class="px-3 py-1 bg-gray-700 rounded hover:bg-gray-600 text-sm">
-                    ↻ Refresh
+    <header class="bg-gray-800 border-b border-gray-700 px-4 py-3 flex-shrink-0">
+        <div class="flex items-center justify-between">
+            <h1 class="text-lg font-bold text-blue-400">⚡ Vibes</h1>
+            <div class="flex items-center gap-2">
+                <span id="stats" class="text-xs text-gray-400 hidden sm:inline">Loading...</span>
+                <button onclick="refreshBoard()" class="p-2 bg-gray-700 rounded-lg hover:bg-gray-600 active:bg-gray-500 text-sm">
+                    ↻
                 </button>
             </div>
         </div>
     </header>
 
-    <div class="flex max-w-7xl mx-auto">
+    <!-- Mobile Tab Bar -->
+    <div class="md:hidden flex border-b border-gray-700 bg-gray-800 flex-shrink-0">
+        <button id="tab-board" onclick="showView('board')" class="flex-1 py-3 text-sm font-medium text-center tab-active">
+            Board
+        </button>
+        <button id="tab-chat" onclick="showView('chat')" class="flex-1 py-3 text-sm font-medium text-center text-gray-400">
+            Claude
+        </button>
+    </div>
+
+    <!-- Main Content -->
+    <div class="flex flex-1 overflow-hidden">
         <!-- Kanban Board -->
-        <main class="flex-1 p-6">
-            <div class="grid grid-cols-4 gap-4">
-                <!-- To Do -->
-                <div class="bg-gray-800 rounded-lg p-4">
-                    <h2 class="font-semibold text-gray-300 mb-4 flex items-center gap-2">
-                        <span class="w-3 h-3 bg-gray-500 rounded-full"></span>
-                        To Do
-                        <span id="todo-count" class="text-xs bg-gray-700 px-2 py-0.5 rounded-full">0</span>
-                    </h2>
-                    <div id="todo" class="space-y-2 min-h-[200px]" ondragover="allowDrop(event)" ondrop="drop(event, 'pending')">
+        <main id="view-board" class="flex-1 flex flex-col overflow-hidden">
+            <!-- Kanban Columns - horizontal scroll on mobile -->
+            <div class="flex-1 overflow-x-auto overflow-y-auto kanban-scroll p-4">
+                <div class="flex md:grid md:grid-cols-4 gap-3 min-w-max md:min-w-0">
+                    <!-- To Do -->
+                    <div class="w-72 md:w-auto bg-gray-800 rounded-lg p-3 flex-shrink-0">
+                        <h2 class="font-semibold text-gray-300 mb-3 flex items-center gap-2 text-sm">
+                            <span class="w-2.5 h-2.5 bg-gray-500 rounded-full"></span>
+                            To Do
+                            <span id="todo-count" class="text-xs bg-gray-700 px-2 py-0.5 rounded-full">0</span>
+                        </h2>
+                        <div id="todo" class="space-y-2 min-h-[150px]" ondragover="allowDrop(event)" ondrop="drop(event, 'pending')">
+                        </div>
                     </div>
-                </div>
 
-                <!-- In Progress -->
-                <div class="bg-gray-800 rounded-lg p-4">
-                    <h2 class="font-semibold text-gray-300 mb-4 flex items-center gap-2">
-                        <span class="w-3 h-3 bg-blue-500 rounded-full"></span>
-                        In Progress
-                        <span id="progress-count" class="text-xs bg-gray-700 px-2 py-0.5 rounded-full">0</span>
-                    </h2>
-                    <div id="in_progress" class="space-y-2 min-h-[200px]" ondragover="allowDrop(event)" ondrop="drop(event, 'in_progress')">
+                    <!-- In Progress -->
+                    <div class="w-72 md:w-auto bg-gray-800 rounded-lg p-3 flex-shrink-0">
+                        <h2 class="font-semibold text-gray-300 mb-3 flex items-center gap-2 text-sm">
+                            <span class="w-2.5 h-2.5 bg-blue-500 rounded-full"></span>
+                            In Progress
+                            <span id="progress-count" class="text-xs bg-gray-700 px-2 py-0.5 rounded-full">0</span>
+                        </h2>
+                        <div id="in_progress" class="space-y-2 min-h-[150px]" ondragover="allowDrop(event)" ondrop="drop(event, 'in_progress')">
+                        </div>
                     </div>
-                </div>
 
-                <!-- Review -->
-                <div class="bg-gray-800 rounded-lg p-4">
-                    <h2 class="font-semibold text-gray-300 mb-4 flex items-center gap-2">
-                        <span class="w-3 h-3 bg-yellow-500 rounded-full"></span>
-                        Review
-                        <span id="review-count" class="text-xs bg-gray-700 px-2 py-0.5 rounded-full">0</span>
-                    </h2>
-                    <div id="needs_review" class="space-y-2 min-h-[200px]" ondragover="allowDrop(event)" ondrop="drop(event, 'needs_review')">
+                    <!-- Review -->
+                    <div class="w-72 md:w-auto bg-gray-800 rounded-lg p-3 flex-shrink-0">
+                        <h2 class="font-semibold text-gray-300 mb-3 flex items-center gap-2 text-sm">
+                            <span class="w-2.5 h-2.5 bg-yellow-500 rounded-full"></span>
+                            Review
+                            <span id="review-count" class="text-xs bg-gray-700 px-2 py-0.5 rounded-full">0</span>
+                        </h2>
+                        <div id="needs_review" class="space-y-2 min-h-[150px]" ondragover="allowDrop(event)" ondrop="drop(event, 'needs_review')">
+                        </div>
                     </div>
-                </div>
 
-                <!-- Done -->
-                <div class="bg-gray-800 rounded-lg p-4">
-                    <h2 class="font-semibold text-gray-300 mb-4 flex items-center gap-2">
-                        <span class="w-3 h-3 bg-green-500 rounded-full"></span>
-                        Done
-                        <span id="done-count" class="text-xs bg-gray-700 px-2 py-0.5 rounded-full">0</span>
-                    </h2>
-                    <div id="passing" class="space-y-2 min-h-[200px]" ondragover="allowDrop(event)" ondrop="drop(event, 'passing')">
+                    <!-- Done -->
+                    <div class="w-72 md:w-auto bg-gray-800 rounded-lg p-3 flex-shrink-0">
+                        <h2 class="font-semibold text-gray-300 mb-3 flex items-center gap-2 text-sm">
+                            <span class="w-2.5 h-2.5 bg-green-500 rounded-full"></span>
+                            Done
+                            <span id="done-count" class="text-xs bg-gray-700 px-2 py-0.5 rounded-full">0</span>
+                        </h2>
+                        <div id="passing" class="space-y-2 min-h-[150px]" ondragover="allowDrop(event)" ondrop="drop(event, 'passing')">
+                        </div>
                     </div>
                 </div>
             </div>
 
-            <!-- Add Task -->
-            <div class="mt-6">
-                <button onclick="showAddTask()" class="px-4 py-2 bg-blue-600 rounded-lg hover:bg-blue-500 text-sm font-medium">
+            <!-- Add Task Button -->
+            <div class="p-4 border-t border-gray-700 flex-shrink-0 safe-bottom">
+                <button onclick="showAddTask()" class="w-full md:w-auto px-4 py-3 bg-blue-600 rounded-lg hover:bg-blue-500 active:bg-blue-700 text-sm font-medium">
                     + Add Task
                 </button>
             </div>
         </main>
 
         <!-- Claude Chat Sidebar -->
-        <aside class="w-96 bg-gray-800 border-l border-gray-700 flex flex-col h-[calc(100vh-73px)]">
-            <div class="p-4 border-b border-gray-700">
+        <aside id="view-chat" class="hidden md:flex w-full md:w-96 bg-gray-800 md:border-l border-gray-700 flex-col h-full">
+            <div class="p-4 border-b border-gray-700 flex-shrink-0">
                 <h2 class="font-semibold text-gray-300">Claude</h2>
                 <p class="text-xs text-gray-500">Ask about tasks or get help</p>
             </div>
 
             <!-- Chat Messages -->
-            <div id="chat-messages" class="flex-1 overflow-y-auto p-4 space-y-4">
+            <div id="chat-messages" class="flex-1 overflow-y-auto p-4 space-y-3">
                 <div class="text-gray-500 text-sm text-center py-8">
                     Start a conversation with Claude
                 </div>
             </div>
 
             <!-- Chat Input -->
-            <div class="p-4 border-t border-gray-700">
+            <div class="p-3 border-t border-gray-700 flex-shrink-0 safe-bottom">
                 <form id="chat-form" onsubmit="sendMessage(event)" class="flex flex-col gap-2">
                     <textarea
                         id="chat-input"
                         placeholder="Ask Claude... (Shift+Enter for new line)"
                         rows="3"
-                        class="w-full bg-gray-700 rounded-lg px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none overflow-y-auto"
+                        class="w-full bg-gray-700 rounded-lg px-4 py-3 text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none overflow-y-auto"
                         style="min-height: 80px; max-height: 200px;"
                         onkeydown="handleChatKeydown(event)"
                         oninput="autoResizeTextarea(this)"
                     ></textarea>
-                    <div class="flex justify-end">
-                        <button type="submit" class="px-4 py-2 bg-blue-600 rounded-lg hover:bg-blue-500 text-sm">
+                    <div class="flex justify-between items-center">
+                        <div class="flex gap-1 flex-wrap">
+                            <button type="button" onclick="quickPrompt('Summarize current tasks')" class="text-xs px-2 py-1.5 bg-gray-700 rounded hover:bg-gray-600 active:bg-gray-500">
+                                Summarize
+                            </button>
+                            <button type="button" onclick="quickPrompt('What should I work on next?')" class="text-xs px-2 py-1.5 bg-gray-700 rounded hover:bg-gray-600 active:bg-gray-500">
+                                Next task
+                            </button>
+                            <button type="button" onclick="quickPrompt('Run quality checks')" class="text-xs px-2 py-1.5 bg-gray-700 rounded hover:bg-gray-600 active:bg-gray-500">
+                                Quality
+                            </button>
+                        </div>
+                        <button type="submit" class="px-5 py-2 bg-blue-600 rounded-lg hover:bg-blue-500 active:bg-blue-700 text-sm font-medium">
                             Send
                         </button>
                     </div>
                 </form>
-                <div class="mt-2 flex gap-2">
-                    <button onclick="quickPrompt('Summarize current tasks')" class="text-xs px-2 py-1 bg-gray-700 rounded hover:bg-gray-600">
-                        Summarize
-                    </button>
-                    <button onclick="quickPrompt('What should I work on next?')" class="text-xs px-2 py-1 bg-gray-700 rounded hover:bg-gray-600">
-                        Next task
-                    </button>
-                    <button onclick="quickPrompt('Run quality checks')" class="text-xs px-2 py-1 bg-gray-700 rounded hover:bg-gray-600">
-                        Quality
-                    </button>
-                </div>
             </div>
         </aside>
     </div>
 
     <!-- Add Task Modal -->
-    <div id="add-task-modal" class="fixed inset-0 bg-black/50 hidden items-center justify-center">
-        <div class="bg-gray-800 rounded-lg p-6 w-full max-w-md">
+    <div id="add-task-modal" class="fixed inset-0 bg-black/50 hidden items-center justify-center z-50 p-4">
+        <div class="bg-gray-800 rounded-lg p-5 w-full max-w-md max-h-[90vh] overflow-y-auto">
             <h3 class="text-lg font-semibold mb-4">Add New Task</h3>
             <form onsubmit="addTask(event)">
                 <div class="space-y-4">
                     <div>
                         <label class="block text-sm text-gray-400 mb-1">Name</label>
-                        <input type="text" id="task-name" required class="w-full bg-gray-700 rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                        <input type="text" id="task-name" required class="w-full bg-gray-700 rounded px-3 py-3 text-base focus:outline-none focus:ring-2 focus:ring-blue-500">
                     </div>
                     <div>
                         <label class="block text-sm text-gray-400 mb-1">Description</label>
-                        <textarea id="task-desc" rows="3" class="w-full bg-gray-700 rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"></textarea>
+                        <textarea id="task-desc" rows="3" class="w-full bg-gray-700 rounded px-3 py-3 text-base focus:outline-none focus:ring-2 focus:ring-blue-500"></textarea>
                     </div>
                     <div>
                         <label class="block text-sm text-gray-400 mb-1">Test Cases (one per line)</label>
-                        <textarea id="task-tests" rows="3" placeholder="Test case 1&#10;Test case 2" class="w-full bg-gray-700 rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"></textarea>
+                        <textarea id="task-tests" rows="3" placeholder="Test case 1&#10;Test case 2" class="w-full bg-gray-700 rounded px-3 py-3 text-base focus:outline-none focus:ring-2 focus:ring-blue-500"></textarea>
                     </div>
                     <div>
                         <label class="block text-sm text-gray-400 mb-1">Priority</label>
-                        <input type="number" id="task-priority" value="0" class="w-full bg-gray-700 rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                        <input type="number" id="task-priority" value="0" class="w-full bg-gray-700 rounded px-3 py-3 text-base focus:outline-none focus:ring-2 focus:ring-blue-500">
                     </div>
                 </div>
-                <div class="flex justify-end gap-2 mt-6">
-                    <button type="button" onclick="hideAddTask()" class="px-4 py-2 bg-gray-700 rounded hover:bg-gray-600">Cancel</button>
-                    <button type="submit" class="px-4 py-2 bg-blue-600 rounded hover:bg-blue-500">Add Task</button>
+                <div class="flex gap-2 mt-6">
+                    <button type="button" onclick="hideAddTask()" class="flex-1 px-4 py-3 bg-gray-700 rounded-lg hover:bg-gray-600 active:bg-gray-500">Cancel</button>
+                    <button type="submit" class="flex-1 px-4 py-3 bg-blue-600 rounded-lg hover:bg-blue-500 active:bg-blue-700">Add Task</button>
                 </div>
             </form>
         </div>
     </div>
 
     <!-- Task Detail Modal -->
-    <div id="task-detail-modal" class="fixed inset-0 bg-black/50 hidden items-center justify-center">
-        <div class="bg-gray-800 rounded-lg p-6 w-full max-w-lg">
+    <div id="task-detail-modal" class="fixed inset-0 bg-black/50 hidden items-center justify-center z-50 p-4">
+        <div class="bg-gray-800 rounded-lg p-5 w-full max-w-lg max-h-[90vh] overflow-y-auto">
             <div class="flex justify-between items-start mb-4">
-                <h3 id="detail-name" class="text-lg font-semibold"></h3>
-                <button onclick="hideTaskDetail()" class="text-gray-500 hover:text-gray-300">✕</button>
+                <h3 id="detail-name" class="text-lg font-semibold pr-4"></h3>
+                <button onclick="hideTaskDetail()" class="text-gray-500 hover:text-gray-300 p-1 -mr-1">✕</button>
             </div>
             <div id="detail-content" class="space-y-4">
             </div>
-            <div class="flex justify-end gap-2 mt-6">
-                <button onclick="workOnTask()" class="px-4 py-2 bg-blue-600 rounded hover:bg-blue-500">
+            <div class="flex gap-2 mt-6">
+                <button onclick="hideTaskDetail()" class="flex-1 px-4 py-3 bg-gray-700 rounded-lg hover:bg-gray-600 active:bg-gray-500">
+                    Close
+                </button>
+                <button onclick="workOnTask()" class="flex-1 px-4 py-3 bg-blue-600 rounded-lg hover:bg-blue-500 active:bg-blue-700">
                     Work on this
                 </button>
             </div>
@@ -188,6 +220,7 @@
     <script>
         const API_BASE = '/api';
         let currentTask = null;
+        let currentView = 'board';
 
         // Initialize
         document.addEventListener('DOMContentLoaded', () => {
@@ -195,6 +228,35 @@
             // Poll for updates every 10 seconds
             setInterval(refreshBoard, 10000);
         });
+
+        // View switching for mobile
+        function showView(view) {
+            currentView = view;
+            const boardView = document.getElementById('view-board');
+            const chatView = document.getElementById('view-chat');
+            const tabBoard = document.getElementById('tab-board');
+            const tabChat = document.getElementById('tab-chat');
+
+            if (view === 'board') {
+                boardView.classList.remove('hidden');
+                boardView.classList.add('flex');
+                chatView.classList.add('hidden');
+                chatView.classList.remove('flex');
+                tabBoard.classList.add('tab-active', 'text-blue-400');
+                tabBoard.classList.remove('text-gray-400');
+                tabChat.classList.remove('tab-active', 'text-blue-400');
+                tabChat.classList.add('text-gray-400');
+            } else {
+                boardView.classList.add('hidden');
+                boardView.classList.remove('flex');
+                chatView.classList.remove('hidden');
+                chatView.classList.add('flex');
+                tabChat.classList.add('tab-active', 'text-blue-400');
+                tabChat.classList.remove('text-gray-400');
+                tabBoard.classList.remove('tab-active', 'text-blue-400');
+                tabBoard.classList.add('text-gray-400');
+            }
+        }
 
         // Fetch and render board
         async function refreshBoard() {
@@ -248,7 +310,7 @@
 
         function createTaskCard(task) {
             const card = document.createElement('div');
-            card.className = 'bg-gray-700 rounded-lg p-3 cursor-pointer hover:bg-gray-600 transition-colors';
+            card.className = 'bg-gray-700 rounded-lg p-3 cursor-pointer hover:bg-gray-600 active:bg-gray-500 transition-colors touch-manipulation';
             card.draggable = true;
             card.dataset.id = task.id;
             card.ondragstart = (e) => drag(e, task.id);
@@ -378,6 +440,8 @@
 
         function workOnTask() {
             if (currentTask) {
+                // Switch to chat view on mobile
+                showView('chat');
                 quickPrompt(`Help me implement: ${currentTask.name}\n\nDescription: ${currentTask.description || 'None'}\n\nTest cases:\n${currentTask.test_cases?.join('\n') || 'None'}`);
                 hideTaskDetail();
             }
@@ -393,6 +457,7 @@
             // Add user message
             addChatMessage(message, 'user');
             input.value = '';
+            autoResizeTextarea(input);
 
             // Send to API
             try {
@@ -415,10 +480,10 @@
 
             const msg = document.createElement('div');
             msg.className = role === 'user'
-                ? 'bg-blue-600 rounded-lg p-3 ml-8'
+                ? 'bg-blue-600 rounded-lg p-3 ml-4 md:ml-8'
                 : role === 'error'
                 ? 'bg-red-600/20 text-red-400 rounded-lg p-3'
-                : 'bg-gray-700 rounded-lg p-3 mr-8';
+                : 'bg-gray-700 rounded-lg p-3 mr-4 md:mr-8';
 
             // Format the text with basic markdown support
             const formatted = formatMessage(text);
