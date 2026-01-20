@@ -10,7 +10,7 @@
 #   - DigitalOcean
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/yourusername/vibes/main/deploy/setup-server.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/StreetsDigital/vibes/claude/evaluate-pageindex-zFMFu/deploy/setup-server.sh | bash
 #   # Or:
 #   ./setup-server.sh
 #
@@ -36,6 +36,7 @@ error() { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
 VIBES_USER="vibes"
 VIBES_HOME="/home/${VIBES_USER}"
 VIBES_REPO="https://github.com/StreetsDigital/vibes.git"
+VIBES_BRANCH="claude/evaluate-pageindex-zFMFu"
 PROJECTS_DIR="${VIBES_HOME}/projects"
 
 # ===========================================
@@ -135,10 +136,10 @@ chown -R "${VIBES_USER}:${VIBES_USER}" "${VIBES_HOME}"
 # ===========================================
 log "Cloning vibes repository..."
 if [[ ! -d "${VIBES_HOME}/vibes" ]]; then
-    su - "${VIBES_USER}" -c "git clone ${VIBES_REPO} ${VIBES_HOME}/vibes"
+    su - "${VIBES_USER}" -c "git clone -b ${VIBES_BRANCH} ${VIBES_REPO} ${VIBES_HOME}/vibes"
 else
     log "Vibes repo already exists, pulling latest..."
-    su - "${VIBES_USER}" -c "cd ${VIBES_HOME}/vibes && git pull"
+    su - "${VIBES_USER}" -c "cd ${VIBES_HOME}/vibes && git pull origin ${VIBES_BRANCH}"
 fi
 
 # ===========================================

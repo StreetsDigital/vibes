@@ -5,7 +5,7 @@
 # One-command setup for vibecoding from your phone
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/.../lightsail/setup.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/StreetsDigital/vibes/claude/evaluate-pageindex-zFMFu/lightsail/setup.sh | bash
 #   OR
 #   ./lightsail/setup.sh
 #
