@@ -179,6 +179,41 @@ else
 fi
 
 # ===========================================
+# Claude OAuth Setup Instructions
+# ===========================================
+cat > "${VIBES_HOME}/CLAUDE_AUTH.md" << 'EOF'
+# Claude Authentication
+
+## Option 1: Claude Pro (OAuth) - Recommended for interactive use
+
+1. SSH into the server as the vibes user
+2. Run `claude`
+3. It will open a browser URL for authentication
+4. Complete OAuth flow in browser
+5. Return to terminal - you're authenticated!
+
+Note: OAuth works for interactive sessions. For headless automation
+(like Fly.io Polecats), you'll need an API key.
+
+## Option 2: API Key
+
+1. Go to https://console.anthropic.com/api-keys
+2. Create a new key
+3. Add to ~/.claude/config.json or set ANTHROPIC_API_KEY
+
+## Authenticating via SSH (headless server)
+
+If you can't open a browser on the server:
+
+1. Run `claude auth login` on the server
+2. Copy the URL it shows
+3. Open that URL on your laptop/phone
+4. Complete authentication
+5. The server session will automatically detect it
+EOF
+chown "${VIBES_USER}:${VIBES_USER}" "${VIBES_HOME}/CLAUDE_AUTH.md"
+
+# ===========================================
 # Setup tmux Configuration
 # ===========================================
 log "Setting up tmux..."
