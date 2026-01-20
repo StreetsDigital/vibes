@@ -569,6 +569,218 @@ Respond helpfully and concisely."""
 
 
 # ===========================================
+# Claude Settings API (MCP, Skills, Agents)
+# ===========================================
+
+def get_claude_settings_paths() -> dict:
+    """Get paths to Claude settings files."""
+    home = Path.home()
+    return {
+        "global": home / ".claude" / "settings.json",
+        "project": _project_dir / ".claude" / "settings.json" if _project_dir else None,
+        "skills_global": home / ".claude" / "skills",
+        "skills_project": _project_dir / ".claude" / "skills" if _project_dir else None,
+    }
+
+
+def load_claude_settings(scope: str = "global") -> dict:
+    """Load Claude settings from file."""
+    paths = get_claude_settings_paths()
+    path = paths.get(scope)
+    if not path or not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text())
+    except:
+        return {}
+
+
+def save_claude_settings(settings: dict, scope: str = "global"):
+    """Save Claude settings to file."""
+    paths = get_claude_settings_paths()
+    path = paths.get(scope)
+    if path:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(settings, indent=2))
+
+
+@app.route('/api/claude/mcp')
+@requires_auth
+def get_mcp_servers():
+    """Get configured MCP servers."""
+    global_settings = load_claude_settings("global")
+    project_settings = load_claude_settings("project")
+
+    servers = []
+
+    # Global MCP servers
+    for name, config in global_settings.get("mcpServers", {}).items():
+        servers.append({
+            "name": name,
+            "scope": "global",
+            "command": config.get("command", ""),
+            "args": config.get("args", []),
+            "enabled": not config.get("disabled", False)
+        })
+
+    # Project MCP servers
+    for name, config in project_settings.get("mcpServers", {}).items():
+        servers.append({
+            "name": name,
+            "scope": "project",
+            "command": config.get("command", ""),
+            "args": config.get("args", []),
+            "enabled": not config.get("disabled", False)
+        })
+
+    return jsonify({"servers": servers})
+
+
+@app.route('/api/claude/mcp', methods=['POST'])
+@requires_auth
+def add_mcp_server():
+    """Add a new MCP server."""
+    data = request.json
+    name = data.get("name")
+    command = data.get("command")
+    args = data.get("args", [])
+    scope = data.get("scope", "project")
+
+    if not name or not command:
+        return jsonify({"error": "Name and command required"}), 400
+
+    settings = load_claude_settings(scope)
+    if "mcpServers" not in settings:
+        settings["mcpServers"] = {}
+
+    settings["mcpServers"][name] = {
+        "command": command,
+        "args": args
+    }
+
+    save_claude_settings(settings, scope)
+    return jsonify({"success": True, "name": name})
+
+
+@app.route('/api/claude/mcp/<name>/toggle', methods=['POST'])
+@requires_auth
+def toggle_mcp_server(name):
+    """Toggle an MCP server on/off."""
+    data = request.json
+    scope = data.get("scope", "project")
+    enabled = data.get("enabled", True)
+
+    settings = load_claude_settings(scope)
+    if "mcpServers" in settings and name in settings["mcpServers"]:
+        if enabled:
+            settings["mcpServers"][name].pop("disabled", None)
+        else:
+            settings["mcpServers"][name]["disabled"] = True
+        save_claude_settings(settings, scope)
+        return jsonify({"success": True, "enabled": enabled})
+
+    return jsonify({"error": "Server not found"}), 404
+
+
+@app.route('/api/claude/skills')
+@requires_auth
+def get_skills():
+    """Get available skills."""
+    paths = get_claude_settings_paths()
+    skills = []
+
+    # Check both global and project skills directories
+    for scope, skills_dir in [("global", paths["skills_global"]), ("project", paths["skills_project"])]:
+        if skills_dir and skills_dir.exists():
+            for skill_file in skills_dir.rglob("*.md"):
+                try:
+                    content = skill_file.read_text()
+                    # Parse frontmatter
+                    name = skill_file.stem
+                    description = ""
+                    if content.startswith("---"):
+                        parts = content.split("---", 2)
+                        if len(parts) >= 3:
+                            import re
+                            name_match = re.search(r'name:\s*(.+)', parts[1])
+                            desc_match = re.search(r'description:\s*(.+)', parts[1])
+                            if name_match:
+                                name = name_match.group(1).strip()
+                            if desc_match:
+                                description = desc_match.group(1).strip()
+
+                    skills.append({
+                        "name": name,
+                        "file": str(skill_file),
+                        "scope": scope,
+                        "description": description,
+                        "enabled": True  # Skills are always enabled if they exist
+                    })
+                except:
+                    pass
+
+    return jsonify({"skills": skills})
+
+
+@app.route('/api/claude/skills', methods=['POST'])
+@requires_auth
+def create_skill():
+    """Create a new skill."""
+    data = request.json
+    name = data.get("name")
+    description = data.get("description", "")
+    trigger = data.get("trigger", "")
+    solution = data.get("solution", "")
+    scope = data.get("scope", "project")
+
+    if not name:
+        return jsonify({"error": "Name required"}), 400
+
+    paths = get_claude_settings_paths()
+    skills_dir = paths[f"skills_{scope}"]
+    if not skills_dir:
+        return jsonify({"error": "Invalid scope"}), 400
+
+    skills_dir.mkdir(parents=True, exist_ok=True)
+
+    # Create skill file
+    content = f"""---
+name: {name}
+description: {description}
+author: user
+version: 1.0.0
+---
+
+## Trigger
+{trigger}
+
+## Solution
+{solution}
+
+## Verification
+Verify the solution works as expected.
+"""
+
+    skill_file = skills_dir / f"{name.lower().replace(' ', '-')}.md"
+    skill_file.write_text(content)
+
+    return jsonify({"success": True, "file": str(skill_file)})
+
+
+@app.route('/api/claude/skills/<path:file_path>')
+@requires_auth
+def get_skill_content(file_path):
+    """Get skill file content."""
+    try:
+        path = Path("/" + file_path)
+        if path.exists() and path.suffix == ".md":
+            return jsonify({"content": path.read_text()})
+        return jsonify({"error": "Skill not found"}), 404
+    except:
+        return jsonify({"error": "Invalid path"}), 400
+
+
+# ===========================================
 # Webhook endpoints (for Polecats)
 # ===========================================
 

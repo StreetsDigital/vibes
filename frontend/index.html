@@ -89,6 +89,9 @@
         <button id="tab-chat" onclick="showView('chat')" class="flex-1 py-3 text-sm font-medium text-center text-gray-400">
             Claude
         </button>
+        <button id="tab-tools" onclick="showView('tools')" class="flex-1 py-3 text-sm font-medium text-center text-gray-400">
+            Tools
+        </button>
     </div>
 
     <!-- Main Content -->
@@ -231,6 +234,127 @@
                 </div>
             </div>
         </aside>
+
+        <!-- Tools Panel -->
+        <aside id="view-tools" class="hidden w-full md:w-96 bg-gray-900 md:bg-gray-800 md:border-l border-gray-700 flex-col h-full overflow-y-auto">
+            <div class="p-4 border-b border-gray-700 flex-shrink-0">
+                <h2 class="font-semibold text-gray-300">Claude Tools</h2>
+                <p class="text-xs text-gray-500">MCP servers, skills, and settings</p>
+            </div>
+
+            <!-- MCP Servers Section -->
+            <div class="p-4 border-b border-gray-700">
+                <div class="flex items-center justify-between mb-3">
+                    <h3 class="text-sm font-medium text-gray-400">MCP Servers</h3>
+                    <button onclick="showAddMcpModal()" class="text-xs px-2 py-1 bg-gray-700 rounded hover:bg-gray-600">+ Add</button>
+                </div>
+                <div id="mcp-servers-list" class="space-y-2">
+                    <!-- Populated by JS -->
+                </div>
+            </div>
+
+            <!-- Skills Section -->
+            <div class="p-4 border-b border-gray-700">
+                <div class="flex items-center justify-between mb-3">
+                    <h3 class="text-sm font-medium text-gray-400">Skills</h3>
+                    <button onclick="showAddSkillModal()" class="text-xs px-2 py-1 bg-gray-700 rounded hover:bg-gray-600">+ Add</button>
+                </div>
+                <div id="skills-list" class="space-y-2">
+                    <!-- Populated by JS -->
+                </div>
+            </div>
+
+            <!-- Quick Actions -->
+            <div class="p-4">
+                <h3 class="text-sm font-medium text-gray-400 mb-3">Quick Actions</h3>
+                <div class="space-y-2">
+                    <button onclick="quickPrompt('/commit')" class="w-full text-left px-3 py-2 bg-gray-800 rounded-lg hover:bg-gray-700 text-sm">
+                        Commit changes
+                    </button>
+                    <button onclick="quickPrompt('Create a pull request')" class="w-full text-left px-3 py-2 bg-gray-800 rounded-lg hover:bg-gray-700 text-sm">
+                        Create PR
+                    </button>
+                    <button onclick="quickPrompt('/verify')" class="w-full text-left px-3 py-2 bg-gray-800 rounded-lg hover:bg-gray-700 text-sm">
+                        Run quality checks
+                    </button>
+                    <button onclick="quickPrompt('/retrospective')" class="w-full text-left px-3 py-2 bg-gray-800 rounded-lg hover:bg-gray-700 text-sm">
+                        Extract learnings
+                    </button>
+                </div>
+            </div>
+        </aside>
+    </div>
+
+    <!-- Add MCP Server Modal -->
+    <div id="add-mcp-modal" class="fixed inset-0 bg-black/50 hidden items-center justify-center z-50 p-4">
+        <div class="bg-gray-800 rounded-xl p-5 w-full max-w-md">
+            <h3 class="text-lg font-semibold mb-4">Add MCP Server</h3>
+            <form onsubmit="addMcpServer(event)">
+                <div class="space-y-4">
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-1">Name</label>
+                        <input type="text" id="mcp-name" required placeholder="my-server" class="w-full bg-gray-700 rounded-lg px-3 py-3 text-base focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    </div>
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-1">Command</label>
+                        <input type="text" id="mcp-command" required placeholder="npx" class="w-full bg-gray-700 rounded-lg px-3 py-3 text-base focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    </div>
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-1">Arguments (space separated)</label>
+                        <input type="text" id="mcp-args" placeholder="-y @modelcontextprotocol/server-github" class="w-full bg-gray-700 rounded-lg px-3 py-3 text-base focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    </div>
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-1">Scope</label>
+                        <select id="mcp-scope" class="w-full bg-gray-700 rounded-lg px-3 py-3 text-base focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            <option value="project">Project</option>
+                            <option value="global">Global</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="flex gap-2 mt-6">
+                    <button type="button" onclick="hideAddMcpModal()" class="flex-1 px-4 py-3 bg-gray-700 rounded-lg hover:bg-gray-600">Cancel</button>
+                    <button type="submit" class="flex-1 px-4 py-3 bg-blue-600 rounded-lg hover:bg-blue-500">Add</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Add Skill Modal -->
+    <div id="add-skill-modal" class="fixed inset-0 bg-black/50 hidden items-center justify-center z-50 p-4">
+        <div class="bg-gray-800 rounded-xl p-5 w-full max-w-md max-h-[90vh] overflow-y-auto">
+            <h3 class="text-lg font-semibold mb-4">Create Skill</h3>
+            <form onsubmit="addSkill(event)">
+                <div class="space-y-4">
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-1">Name</label>
+                        <input type="text" id="skill-name" required placeholder="fix-common-error" class="w-full bg-gray-700 rounded-lg px-3 py-3 text-base focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    </div>
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-1">Description</label>
+                        <input type="text" id="skill-description" placeholder="What this skill does" class="w-full bg-gray-700 rounded-lg px-3 py-3 text-base focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    </div>
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-1">Trigger (when to use)</label>
+                        <textarea id="skill-trigger" rows="2" placeholder="When error X occurs..." class="w-full bg-gray-700 rounded-lg px-3 py-3 text-base focus:outline-none focus:ring-2 focus:ring-blue-500"></textarea>
+                    </div>
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-1">Solution</label>
+                        <textarea id="skill-solution" rows="4" placeholder="Steps to fix..." class="w-full bg-gray-700 rounded-lg px-3 py-3 text-base focus:outline-none focus:ring-2 focus:ring-blue-500"></textarea>
+                    </div>
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-1">Scope</label>
+                        <select id="skill-scope" class="w-full bg-gray-700 rounded-lg px-3 py-3 text-base focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            <option value="project">Project</option>
+                            <option value="global">Global</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="flex gap-2 mt-6">
+                    <button type="button" onclick="hideAddSkillModal()" class="flex-1 px-4 py-3 bg-gray-700 rounded-lg hover:bg-gray-600">Cancel</button>
+                    <button type="submit" class="flex-1 px-4 py-3 bg-blue-600 rounded-lg hover:bg-blue-500">Create</button>
+                </div>
+            </form>
+        </div>
     </div>
 
     <!-- Action Menu Modal -->
@@ -357,29 +481,39 @@
         // View switching for mobile
         function showView(view) {
             currentView = view;
-            const boardView = document.getElementById('view-board');
-            const chatView = document.getElementById('view-chat');
-            const tabBoard = document.getElementById('tab-board');
-            const tabChat = document.getElementById('tab-chat');
+            const views = ['board', 'chat', 'tools'];
+            const viewElements = {
+                board: document.getElementById('view-board'),
+                chat: document.getElementById('view-chat'),
+                tools: document.getElementById('view-tools')
+            };
+            const tabElements = {
+                board: document.getElementById('tab-board'),
+                chat: document.getElementById('tab-chat'),
+                tools: document.getElementById('tab-tools')
+            };
 
-            if (view === 'board') {
-                boardView.classList.remove('hidden');
-                boardView.classList.add('flex');
-                chatView.classList.add('hidden');
-                chatView.classList.remove('flex');
-                tabBoard.classList.add('tab-active', 'text-blue-400');
-                tabBoard.classList.remove('text-gray-400');
-                tabChat.classList.remove('tab-active', 'text-blue-400');
-                tabChat.classList.add('text-gray-400');
-            } else {
-                boardView.classList.add('hidden');
-                boardView.classList.remove('flex');
-                chatView.classList.remove('hidden');
-                chatView.classList.add('flex');
-                tabChat.classList.add('tab-active', 'text-blue-400');
-                tabChat.classList.remove('text-gray-400');
-                tabBoard.classList.remove('tab-active', 'text-blue-400');
-                tabBoard.classList.add('text-gray-400');
+            views.forEach(v => {
+                const viewEl = viewElements[v];
+                const tabEl = tabElements[v];
+
+                if (v === view) {
+                    viewEl?.classList.remove('hidden');
+                    viewEl?.classList.add('flex');
+                    tabEl?.classList.add('tab-active', 'text-blue-400');
+                    tabEl?.classList.remove('text-gray-400');
+                } else {
+                    viewEl?.classList.add('hidden');
+                    viewEl?.classList.remove('flex');
+                    tabEl?.classList.remove('tab-active', 'text-blue-400');
+                    tabEl?.classList.add('text-gray-400');
+                }
+            });
+
+            // Load tools data when switching to tools view
+            if (view === 'tools') {
+                loadMcpServers();
+                loadSkills();
             }
         }
 
@@ -803,6 +937,172 @@
                 }
             } catch (error) {
                 console.error('Failed to check session:', error);
+            }
+        }
+
+        // ===========================================
+        // MCP & Skills Management
+        // ===========================================
+
+        async function loadMcpServers() {
+            try {
+                const response = await fetch(`${API_BASE}/claude/mcp`);
+                const data = await response.json();
+
+                const list = document.getElementById('mcp-servers-list');
+                list.innerHTML = '';
+
+                if (data.servers && data.servers.length > 0) {
+                    data.servers.forEach(server => {
+                        const div = document.createElement('div');
+                        div.className = 'flex items-center justify-between p-2 bg-gray-800 rounded-lg';
+                        div.innerHTML = `
+                            <div class="flex-1 min-w-0">
+                                <div class="text-sm font-medium truncate">${server.name}</div>
+                                <div class="text-xs text-gray-500">${server.scope}</div>
+                            </div>
+                            <label class="relative inline-flex items-center cursor-pointer ml-2">
+                                <input type="checkbox" ${server.enabled ? 'checked' : ''} onchange="toggleMcp('${server.name}', '${server.scope}', this.checked)" class="sr-only peer">
+                                <div class="w-9 h-5 bg-gray-600 peer-focus:ring-2 peer-focus:ring-blue-500 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-600"></div>
+                            </label>
+                        `;
+                        list.appendChild(div);
+                    });
+                } else {
+                    list.innerHTML = '<div class="text-sm text-gray-500">No MCP servers configured</div>';
+                }
+            } catch (error) {
+                console.error('Failed to load MCP servers:', error);
+            }
+        }
+
+        async function toggleMcp(name, scope, enabled) {
+            try {
+                await fetch(`${API_BASE}/claude/mcp/${name}/toggle`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ scope, enabled })
+                });
+            } catch (error) {
+                console.error('Failed to toggle MCP server:', error);
+            }
+        }
+
+        function showAddMcpModal() {
+            document.getElementById('add-mcp-modal').classList.remove('hidden');
+            document.getElementById('add-mcp-modal').classList.add('flex');
+        }
+
+        function hideAddMcpModal() {
+            document.getElementById('add-mcp-modal').classList.add('hidden');
+            document.getElementById('add-mcp-modal').classList.remove('flex');
+        }
+
+        async function addMcpServer(event) {
+            event.preventDefault();
+
+            const data = {
+                name: document.getElementById('mcp-name').value,
+                command: document.getElementById('mcp-command').value,
+                args: document.getElementById('mcp-args').value.split(' ').filter(a => a),
+                scope: document.getElementById('mcp-scope').value
+            };
+
+            try {
+                await fetch(`${API_BASE}/claude/mcp`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                });
+                hideAddMcpModal();
+                loadMcpServers();
+
+                // Clear form
+                document.getElementById('mcp-name').value = '';
+                document.getElementById('mcp-command').value = '';
+                document.getElementById('mcp-args').value = '';
+            } catch (error) {
+                console.error('Failed to add MCP server:', error);
+            }
+        }
+
+        async function loadSkills() {
+            try {
+                const response = await fetch(`${API_BASE}/claude/skills`);
+                const data = await response.json();
+
+                const list = document.getElementById('skills-list');
+                list.innerHTML = '';
+
+                if (data.skills && data.skills.length > 0) {
+                    data.skills.forEach(skill => {
+                        const div = document.createElement('div');
+                        div.className = 'p-2 bg-gray-800 rounded-lg cursor-pointer hover:bg-gray-700';
+                        div.onclick = () => viewSkill(skill.file);
+                        div.innerHTML = `
+                            <div class="text-sm font-medium">${skill.name}</div>
+                            <div class="text-xs text-gray-500">${skill.description || skill.scope}</div>
+                        `;
+                        list.appendChild(div);
+                    });
+                } else {
+                    list.innerHTML = '<div class="text-sm text-gray-500">No skills created yet</div>';
+                }
+            } catch (error) {
+                console.error('Failed to load skills:', error);
+            }
+        }
+
+        async function viewSkill(filePath) {
+            try {
+                const response = await fetch(`${API_BASE}/claude/skills${filePath}`);
+                const data = await response.json();
+                if (data.content) {
+                    showView('chat');
+                    addChatMessage('**Skill Content:**\n```markdown\n' + data.content + '\n```', 'assistant');
+                }
+            } catch (error) {
+                console.error('Failed to view skill:', error);
+            }
+        }
+
+        function showAddSkillModal() {
+            document.getElementById('add-skill-modal').classList.remove('hidden');
+            document.getElementById('add-skill-modal').classList.add('flex');
+        }
+
+        function hideAddSkillModal() {
+            document.getElementById('add-skill-modal').classList.add('hidden');
+            document.getElementById('add-skill-modal').classList.remove('flex');
+        }
+
+        async function addSkill(event) {
+            event.preventDefault();
+
+            const data = {
+                name: document.getElementById('skill-name').value,
+                description: document.getElementById('skill-description').value,
+                trigger: document.getElementById('skill-trigger').value,
+                solution: document.getElementById('skill-solution').value,
+                scope: document.getElementById('skill-scope').value
+            };
+
+            try {
+                await fetch(`${API_BASE}/claude/skills`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                });
+                hideAddSkillModal();
+                loadSkills();
+
+                // Clear form
+                document.getElementById('skill-name').value = '';
+                document.getElementById('skill-description').value = '';
+                document.getElementById('skill-trigger').value = '';
+                document.getElementById('skill-solution').value = '';
+            } catch (error) {
+                console.error('Failed to create skill:', error);
             }
         }
     </script>
