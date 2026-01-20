@@ -41,6 +41,7 @@ _project_dir: Path = None
 _bead_store: BeadStore = None
 _mayor: Mayor = None
 _projects_root: Path = None  # Root directory containing all projects
+_current_claude_process: subprocess.Popen = None  # Track current Claude process for stop functionality
 
 # Auth config (set via environment or args)
 AUTH_USERNAME = os.environ.get("VIBES_USERNAME", "")
@@ -443,6 +444,22 @@ def clear_chat_history():
     return jsonify({"success": True})
 
 
+@app.route('/api/chat/stop', methods=['POST'])
+@requires_auth
+def stop_chat():
+    """Stop the current Claude generation."""
+    global _current_claude_process
+
+    if _current_claude_process is not None:
+        try:
+            _current_claude_process.kill()
+            return jsonify({"success": True, "message": "Stopped"})
+        except Exception as e:
+            return jsonify({"success": False, "error": str(e)})
+    else:
+        return jsonify({"success": True, "message": "No active process"})
+
+
 @app.route('/api/git/branch')
 @requires_auth
 def get_branch():
@@ -544,6 +561,8 @@ def build_chat_context() -> str:
 
 def run_claude_prompt(message: str, context: str) -> str:
     """Run a prompt through Claude CLI."""
+    global _current_claude_process
+
     full_prompt = f"""You are helping with a task board. Here's the current state:
 
 {context}
@@ -553,25 +572,36 @@ User message: {message}
 Respond helpfully and concisely."""
 
     try:
-        # Try using Claude CLI
-        result = subprocess.run(
+        # Use Popen for interruptibility
+        _current_claude_process = subprocess.Popen(
             ["claude", "--print", "-p", full_prompt],
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=60,
             cwd=str(_project_dir)
         )
 
-        if result.returncode == 0:
-            return result.stdout.strip()
-        else:
-            return f"Claude CLI error: {result.stderr}"
+        try:
+            stdout, stderr = _current_claude_process.communicate(timeout=120)
 
-    except subprocess.TimeoutExpired:
-        return "Request timed out. Claude may be processing a long response."
+            if _current_claude_process.returncode == 0:
+                return stdout.strip()
+            elif _current_claude_process.returncode == -9:  # Killed
+                return "*(Stopped by user)*"
+            else:
+                return f"Claude CLI error: {stderr}"
+        except subprocess.TimeoutExpired:
+            _current_claude_process.kill()
+            _current_claude_process.communicate()
+            return "Request timed out. Claude may be processing a long response."
+        finally:
+            _current_claude_process = None
+
     except FileNotFoundError:
+        _current_claude_process = None
         return "Claude CLI not found. Make sure it's installed and in PATH."
     except Exception as e:
+        _current_claude_process = None
         return f"Error running Claude: {str(e)}"
 
 

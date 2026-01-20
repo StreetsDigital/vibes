@@ -56,6 +56,7 @@ export function useBoard() {
 export function useChat() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [loading, setLoading] = useState(false);
+  const [abortController, setAbortController] = useState<AbortController | null>(null);
 
   const loadHistory = useCallback(async () => {
     const data = await apiFetch<{ messages: ChatMessage[] }>('/chat/history');
@@ -67,27 +68,48 @@ export function useChat() {
     setMessages(prev => [...prev, userMsg]);
     setLoading(true);
 
+    // Create new abort controller for this request
+    const controller = new AbortController();
+    setAbortController(controller);
+
     try {
-      const data = await apiFetch<{ response: string }>('/chat', {
+      const response = await fetch(`${API_BASE}/chat`, {
         method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message }),
+        signal: controller.signal,
       });
+      const data = await response.json();
       const assistantMsg: ChatMessage = { role: 'assistant', content: data.response };
       setMessages(prev => [...prev, assistantMsg]);
     } catch (error) {
-      const errorMsg: ChatMessage = { role: 'error', content: 'Error: Could not reach Claude' };
-      setMessages(prev => [...prev, errorMsg]);
+      if ((error as Error).name === 'AbortError') {
+        const stoppedMsg: ChatMessage = { role: 'assistant', content: '*(Stopped)*' };
+        setMessages(prev => [...prev, stoppedMsg]);
+      } else {
+        const errorMsg: ChatMessage = { role: 'error', content: 'Error: Could not reach Claude' };
+        setMessages(prev => [...prev, errorMsg]);
+      }
     } finally {
       setLoading(false);
+      setAbortController(null);
     }
   }, []);
+
+  const stopGeneration = useCallback(() => {
+    if (abortController) {
+      abortController.abort();
+      // Also notify the server to stop any ongoing processing
+      fetch(`${API_BASE}/chat/stop`, { method: 'POST' }).catch(() => {});
+    }
+  }, [abortController]);
 
   const clearHistory = useCallback(async () => {
     await apiFetch('/chat/history', { method: 'DELETE' });
     setMessages([]);
   }, []);
 
-  return { messages, loading, loadHistory, sendMessage, clearHistory };
+  return { messages, loading, loadHistory, sendMessage, stopGeneration, clearHistory };
 }
 
 // Projects API

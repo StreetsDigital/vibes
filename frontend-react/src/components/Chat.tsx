@@ -7,11 +7,12 @@ interface ChatProps {
   loading: boolean;
   branch: string;
   onSend: (message: string) => void;
+  onStop: () => void;
   onClear: () => void;
   onShowAddTask: () => void;
 }
 
-export function Chat({ messages, loading, branch, onSend, onClear, onShowAddTask }: ChatProps) {
+export function Chat({ messages, loading, branch, onSend, onStop, onClear, onShowAddTask }: ChatProps) {
   const [input, setInput] = useState('');
   const [showActionMenu, setShowActionMenu] = useState(false);
   const messagesRef = useRef<HTMLDivElement>(null);
@@ -193,22 +194,27 @@ export function Chat({ messages, loading, branch, onSend, onClear, onShowAddTask
                 </svg>
               </button>
               {/* Send / Stop */}
-              <button
-                onClick={handleSend}
-                disabled={loading}
-                className="p-2 bg-white text-gray-900 rounded-lg hover:bg-gray-200 active:bg-gray-300 ml-1"
-                title="Send"
-              >
-                {loading ? (
+              {loading ? (
+                <button
+                  onClick={onStop}
+                  className="p-2 bg-red-500 text-white rounded-lg hover:bg-red-600 active:bg-red-700 ml-1"
+                  title="Stop"
+                >
                   <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
                     <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8 7a1 1 0 00-1 1v4a1 1 0 001 1h4a1 1 0 001-1V8a1 1 0 00-1-1H8z" clipRule="evenodd" />
                   </svg>
-                ) : (
+                </button>
+              ) : (
+                <button
+                  onClick={handleSend}
+                  className="p-2 bg-white text-gray-900 rounded-lg hover:bg-gray-200 active:bg-gray-300 ml-1"
+                  title="Send"
+                >
                   <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
                     <path d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z" />
                   </svg>
-                )}
-              </button>
+                </button>
+              )}
             </div>
           </div>
         </div>

@@ -124,6 +124,7 @@ export function App() {
             loading={chat.loading}
             branch={git.branch}
             onSend={chat.sendMessage}
+            onStop={chat.stopGeneration}
             onClear={chat.clearHistory}
             onShowAddTask={() => setCurrentView('board')}
           />
