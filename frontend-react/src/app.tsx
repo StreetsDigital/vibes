@@ -97,12 +97,31 @@ export function App() {
         />
       </div>
 
+      {/* Desktop Tab Bar */}
+      <div className="hidden md:flex border-b border-gray-700 bg-gray-800 flex-shrink-0 justify-center">
+        <TabButton
+          active={currentView === 'board'}
+          onClick={() => setCurrentView('board')}
+          label="Board"
+        />
+        <TabButton
+          active={currentView === 'chat'}
+          onClick={() => setCurrentView('chat')}
+          label="Claude"
+        />
+        <TabButton
+          active={currentView === 'tools'}
+          onClick={() => setCurrentView('tools')}
+          label="Tools"
+        />
+      </div>
+
       {/* Main Content */}
       <div className="flex flex-1 overflow-hidden">
         {/* Board View */}
         <main
           className={`flex-1 flex flex-col overflow-hidden ${
-            currentView !== 'board' ? 'hidden md:flex' : 'flex'
+            currentView !== 'board' ? 'hidden' : 'flex'
           }`}
         >
           <Board
@@ -113,10 +132,10 @@ export function App() {
           />
         </main>
 
-        {/* Chat Sidebar */}
+        {/* Chat View */}
         <aside
-          className={`w-full md:w-96 bg-gray-900 md:bg-gray-800 md:border-l border-gray-700 flex-col h-full ${
-            currentView !== 'chat' ? 'hidden md:flex' : 'flex'
+          className={`w-full flex-1 bg-gray-900 flex-col h-full ${
+            currentView !== 'chat' ? 'hidden' : 'flex'
           }`}
         >
           <Chat
@@ -132,7 +151,7 @@ export function App() {
 
         {/* Tools Panel */}
         <aside
-          className={`w-full md:w-96 bg-gray-900 md:bg-gray-800 md:border-l border-gray-700 flex-col h-full ${
+          className={`w-full flex-1 bg-gray-900 flex-col h-full overflow-y-auto ${
             currentView !== 'tools' ? 'hidden' : 'flex'
           }`}
         >
