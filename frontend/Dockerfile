@@ -15,6 +15,7 @@ RUN apt-get update && apt-get install -y curl git && \
 
 # Copy app
 COPY frontend/ /app/frontend/
+COPY frontend-react/dist/ /app/frontend-react/dist/
 COPY mcp_server/gastown_integration.py /app/mcp_server/
 
 ENV PYTHONUNBUFFERED=1
