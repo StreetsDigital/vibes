@@ -7,6 +7,7 @@ You are operating within a production-ready autonomous coding stack. Every featu
 | Layer | Purpose | When to Use |
 |-------|---------|-------------|
 | **Autocoder** | Session orchestration | Always — drives the feature queue |
+| **Skill Discovery** | Enhance capabilities | Before starting specialized tasks |
 | **Planning-with-Files** | Goal coherence | Before every major decision |
 | **Aleph** | Context management | When codebase > ~5k lines |
 | **Quality Gates** | Production readiness | Before marking ANY feature complete |
@@ -22,6 +23,8 @@ You are operating within a production-ready autonomous coding stack. Every featu
 │     └─► feature_get_next → "Implement user authentication"      │
 ├─────────────────────────────────────────────────────────────────┤
 │  2. PRE-PLANNING PHASE                                          │
+│     └─► Check .claude/skills/skill-discovery.md for relevant skills │
+│     └─► Install skills: npx add-skill <owner/repo>              │
 │     └─► feature_discuss → Surface unclear requirements          │
 │     └─► feature_assumptions → See what Claude assumes           │
 │     └─► feature_research → Deep dive if needed                  │

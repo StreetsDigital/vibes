@@ -6,11 +6,11 @@ WORKDIR /app
 # Install dependencies
 RUN pip install --no-cache-dir flask flask-cors pyyaml
 
-# Install Claude CLI
+# Install Claude CLI and Skills tools
 RUN apt-get update && apt-get install -y curl git && \
     curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
     apt-get install -y nodejs && \
-    npm install -g @anthropic-ai/claude-code && \
+    npm install -g @anthropic-ai/claude-code add-skill openskills && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Copy app

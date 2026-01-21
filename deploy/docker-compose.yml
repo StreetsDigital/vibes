@@ -37,6 +37,45 @@ services:
       - dashboard
 
   # ===========================================
+  # Cloudflare WARP (VPN Proxy for correct geolocation)
+  # ===========================================
+  warp:
+    image: caomingjun/warp:latest
+    container_name: vibes-warp
+    restart: unless-stopped
+    environment:
+      - WARP_SLEEP=2
+    cap_add:
+      - NET_ADMIN
+    sysctls:
+      - net.ipv6.conf.all.disable_ipv6=0
+      - net.ipv4.conf.all.src_valid_mark=1
+    volumes:
+      - warp_data:/var/lib/cloudflare-warp
+    networks:
+      - vibes-network
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "--socks5", "localhost:1080", "https://cloudflare.com/cdn-cgi/trace"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # ===========================================
+  # HTTP Proxy (SOCKS5 to HTTP for Node.js)
+  # ===========================================
+  hpts:
+    image: node:20-alpine
+    container_name: vibes-hpts
+    restart: unless-stopped
+    command: sh -c "npm install -g http-proxy-to-socks && hpts -s warp:1080 -p 8080 -l 0.0.0.0"
+    networks:
+      - vibes-network
+    depends_on:
+      warp:
+        condition: service_healthy
+
+  # ===========================================
   # Vibes Frontend (Kanban + Claude Chat)
   # ===========================================
   frontend:
@@ -48,6 +87,10 @@ services:
     environment:
       - VIBES_USE_BEADS=true
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      # Route traffic through HTTP proxy (HPTS converts to SOCKS5->WARP)
+      - HTTPS_PROXY=http://hpts:8080
+      - HTTP_PROXY=http://hpts:8080
+      - NO_PROXY=localhost,127.0.0.1,vibes-warp,vibes-frontend,vibes-dashboard,vibes-caddy,vibes-hpts
     volumes:
       - projects:/projects
       - claude_credentials:/root/.claude
@@ -55,6 +98,9 @@ services:
       - vibes-network
     expose:
       - "3000"
+    depends_on:
+      warp:
+        condition: service_healthy
 
   # ===========================================
   # Vibe-Kanban (Alternative - if you prefer)
@@ -205,6 +251,7 @@ volumes:
   ollama_data:
   postgres_data:
   redis_data:
+  warp_data:
   claude_credentials:
   projects:
     driver: local

@@ -460,6 +460,89 @@ def stop_chat():
         return jsonify({"success": True, "message": "No active process"})
 
 
+@app.route('/api/logs')
+@requires_auth
+def get_claude_logs():
+    """Get Claude debug logs."""
+    import re
+    from pathlib import Path
+
+    filter_type = request.args.get('filter', 'all')
+    limit = int(request.args.get('limit', 200))
+
+    debug_dir = Path.home() / '.claude' / 'debug'
+    logs = []
+
+    if debug_dir.exists():
+        # Get most recent debug files
+        debug_files = sorted(debug_dir.glob('*.txt'), key=lambda f: f.stat().st_mtime, reverse=True)[:5]
+
+        for debug_file in debug_files:
+            try:
+                content = debug_file.read_text()
+                for line in content.split('\n'):
+                    if not line.strip():
+                        continue
+
+                    # Parse log line: 2026-01-21T10:49:59.077Z [LEVEL] message
+                    match = re.match(r'^(\d{4}-\d{2}-\d{2}T[\d:.]+Z)\s+\[(\w+)\]\s+(.*)$', line)
+                    if match:
+                        timestamp, level, message = match.groups()
+                        level = level.lower()
+                        source = 'claude'
+
+                        # Categorize by content
+                        if 'mcp' in message.lower():
+                            source = 'claude'
+                        elif 'statsig' in message.lower() or 'gate' in message.lower():
+                            source = 'system'
+                        elif 'error' in level:
+                            source = 'system'
+
+                        # Apply filter
+                        if filter_type == 'error' and level != 'error':
+                            continue
+                        elif filter_type == 'claude' and source != 'claude':
+                            continue
+                        elif filter_type == 'system' and source != 'system':
+                            continue
+
+                        logs.append({
+                            'id': f"{debug_file.stem}_{len(logs)}",
+                            'timestamp': timestamp,
+                            'level': level if level in ['info', 'warn', 'error', 'debug'] else 'info',
+                            'source': source,
+                            'message': message[:500]  # Truncate long messages
+                        })
+            except Exception as e:
+                print(f"[logs] Error reading {debug_file}: {e}")
+
+    # Sort by timestamp and limit
+    logs.sort(key=lambda x: x['timestamp'], reverse=True)
+    logs = logs[:limit]
+    logs.reverse()  # Oldest first for display
+
+    return jsonify({"logs": logs})
+
+
+@app.route('/api/logs', methods=['DELETE'])
+@requires_auth
+def clear_claude_logs():
+    """Clear Claude debug logs."""
+    from pathlib import Path
+
+    debug_dir = Path.home() / '.claude' / 'debug'
+
+    if debug_dir.exists():
+        for debug_file in debug_dir.glob('*.txt'):
+            try:
+                debug_file.unlink()
+            except Exception as e:
+                print(f"[logs] Error deleting {debug_file}: {e}")
+
+    return jsonify({"success": True})
+
+
 @app.route('/api/git/branch')
 @requires_auth
 def get_branch():

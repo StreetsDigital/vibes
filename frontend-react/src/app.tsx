@@ -4,6 +4,8 @@ import { useBoard, useChat, useProjects, useGit, useSession, useProjectManager, 
 import { Board } from './components/Board';
 import { Chat } from './components/Chat';
 import { ToolsPanel } from './components/ToolsPanel';
+import { LogsPanel } from './components/LogsPanel';
+import { WorkflowPanel } from './components/WorkflowPanel';
 import { Modal } from './components/Modal';
 
 export function App() {
@@ -134,9 +136,19 @@ export function App() {
           label="Claude"
         />
         <TabButton
+          active={currentView === 'flow'}
+          onClick={() => setCurrentView('flow')}
+          label="Flow"
+        />
+        <TabButton
           active={currentView === 'tools'}
           onClick={() => setCurrentView('tools')}
           label="Tools"
+        />
+        <TabButton
+          active={currentView === 'logs'}
+          onClick={() => setCurrentView('logs')}
+          label="Logs"
         />
       </div>
 
@@ -153,9 +165,19 @@ export function App() {
           label="Claude"
         />
         <TabButton
+          active={currentView === 'flow'}
+          onClick={() => setCurrentView('flow')}
+          label="Flow"
+        />
+        <TabButton
           active={currentView === 'tools'}
           onClick={() => setCurrentView('tools')}
           label="Tools"
+        />
+        <TabButton
+          active={currentView === 'logs'}
+          onClick={() => setCurrentView('logs')}
+          label="Logs"
         />
       </div>
 
@@ -199,6 +221,24 @@ export function App() {
           }`}
         >
           <ToolsPanel />
+        </aside>
+
+        {/* Logs Panel */}
+        <aside
+          className={`w-full flex-1 bg-gray-900 flex-col h-full ${
+            currentView !== 'logs' ? 'hidden' : 'flex'
+          }`}
+        >
+          <LogsPanel />
+        </aside>
+
+        {/* Flow/Workflow Panel */}
+        <aside
+          className={`w-full flex-1 bg-gray-900 flex-col h-full ${
+            currentView !== 'flow' ? 'hidden' : 'flex'
+          }`}
+        >
+          <WorkflowPanel />
         </aside>
       </div>
 

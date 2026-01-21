@@ -107,5 +107,15 @@ export interface AgentData {
   containers: ContainerAgent[];
 }
 
+// Log types
+export interface LogEntry {
+  id: string;
+  timestamp: string;
+  level: 'info' | 'warn' | 'error' | 'debug';
+  source: 'claude' | 'system' | 'container' | 'api';
+  message: string;
+  metadata?: Record<string, unknown>;
+}
+
 // View types
-export type ViewType = 'board' | 'chat' | 'tools';
+export type ViewType = 'board' | 'chat' | 'tools' | 'logs' | 'flow';

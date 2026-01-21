@@ -684,7 +684,7 @@ function ListItem({ title, subtitle, checked, onToggle, onClick }: {
   );
 }
 
-function QuickAction({ onClick, label }: { onClick: () => void; label: string }) {
+function _QuickAction({ onClick, label }: { onClick: () => void; label: string }) {
   return (
     <button
       onClick={onClick}
@@ -694,6 +694,7 @@ function QuickAction({ onClick, label }: { onClick: () => void; label: string })
     </button>
   );
 }
+void _QuickAction; // Suppress unused warning
 
 function QuickActionWithState({
   onClick,

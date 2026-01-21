@@ -1,7 +1,7 @@
-import { useState, useCallback } from 'preact/hooks';
+import { useState, useCallback, useRef, useEffect } from 'preact/hooks';
 import type {
   Task, BoardData, ChatMessage, Project,
-  McpServer, Skill, Tool, Hook, AgentData
+  McpServer, Skill, Tool, Hook, AgentData, LogEntry
 } from '../types';
 
 const API_BASE = '/api';
@@ -491,4 +491,82 @@ export function useSystemHealth() {
   }, []);
 
   return { health, loading, error, refresh };
+}
+
+// Logs API
+export type LogFilter = 'all' | 'claude' | 'system' | 'error';
+
+export function useLogs() {
+  const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [filter, setFilter] = useState<LogFilter>('all');
+  const [loading, setLoading] = useState(false);
+  const [autoScroll, setAutoScroll] = useState(true);
+  const [polling, setPolling] = useState(false);
+  const pollIntervalRef = useRef<number | null>(null);
+
+  const load = useCallback(async (filterType?: LogFilter) => {
+    setLoading(true);
+    try {
+      const f = filterType ?? filter;
+      const data = await apiFetch<{ logs: LogEntry[] }>(`/logs?filter=${f}`);
+      setLogs(data.logs || []);
+    } catch (e) {
+      console.error('Failed to load logs:', e);
+    } finally {
+      setLoading(false);
+    }
+  }, [filter]);
+
+  const clear = useCallback(async () => {
+    try {
+      await apiFetch('/logs', { method: 'DELETE' });
+      setLogs([]);
+    } catch (e) {
+      console.error('Failed to clear logs:', e);
+    }
+  }, []);
+
+  const changeFilter = useCallback((newFilter: LogFilter) => {
+    setFilter(newFilter);
+    load(newFilter);
+  }, [load]);
+
+  const startPolling = useCallback(() => {
+    if (pollIntervalRef.current) return;
+    setPolling(true);
+    pollIntervalRef.current = window.setInterval(() => {
+      load();
+    }, 2000);
+  }, [load]);
+
+  const stopPolling = useCallback(() => {
+    if (pollIntervalRef.current) {
+      clearInterval(pollIntervalRef.current);
+      pollIntervalRef.current = null;
+    }
+    setPolling(false);
+  }, []);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current);
+      }
+    };
+  }, []);
+
+  return {
+    logs,
+    filter,
+    loading,
+    autoScroll,
+    polling,
+    load,
+    clear,
+    changeFilter,
+    setAutoScroll,
+    startPolling,
+    stopPolling,
+  };
 }
