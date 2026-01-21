@@ -331,3 +331,142 @@ export function useSession() {
 
   return { ping };
 }
+
+// Project Manager API (isolated containers)
+export interface ManagedProject {
+  id: string;
+  name: string;
+  port: number;
+  git_url?: string;
+  created_at: string;
+  container_status: string;
+  path: string;
+}
+
+export function useProjectManager() {
+  const [managedProjects, setManagedProjects] = useState<ManagedProject[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  const loadProjects = useCallback(async () => {
+    setLoading(true);
+    try {
+      const response = await fetch('/api/manager/projects');
+      const data = await response.json();
+      setManagedProjects(data.projects || []);
+    } catch (error) {
+      console.error('Failed to load managed projects:', error);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const createProject = useCallback(async (name: string, gitUrl?: string) => {
+    const response = await fetch('/api/manager/projects', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, git_url: gitUrl }),
+    });
+    const data = await response.json();
+    if (data.success) {
+      await loadProjects();
+    }
+    return data;
+  }, [loadProjects]);
+
+  const deleteProject = useCallback(async (projectId: string) => {
+    const response = await fetch(`/api/manager/projects/${projectId}`, {
+      method: 'DELETE',
+    });
+    const data = await response.json();
+    if (data.success) {
+      await loadProjects();
+    }
+    return data;
+  }, [loadProjects]);
+
+  const startProject = useCallback(async (projectId: string) => {
+    const response = await fetch(`/api/manager/projects/${projectId}/start`, {
+      method: 'POST',
+    });
+    const data = await response.json();
+    await loadProjects();
+    return data;
+  }, [loadProjects]);
+
+  const stopProject = useCallback(async (projectId: string) => {
+    const response = await fetch(`/api/manager/projects/${projectId}/stop`, {
+      method: 'POST',
+    });
+    const data = await response.json();
+    await loadProjects();
+    return data;
+  }, [loadProjects]);
+
+  const openProject = useCallback((projectId: string) => {
+    // Open project in new tab
+    window.open(`/project/${projectId}/`, '_blank');
+  }, []);
+
+  return {
+    managedProjects,
+    loading,
+    loadProjects,
+    createProject,
+    deleteProject,
+    startProject,
+    stopProject,
+    openProject,
+  };
+}
+
+// System Health API
+export interface SystemHealth {
+  status: 'healthy' | 'warning' | 'critical' | 'error';
+  warnings: string[];
+  cpu: {
+    percent: number;
+    cores: number;
+    load_1m: number;
+    load_5m: number;
+    load_15m: number;
+  };
+  memory: {
+    total_gb: number;
+    used_gb: number;
+    percent: number;
+  };
+  disk: {
+    total_gb: number;
+    used_gb: number;
+    percent: number;
+  };
+  containers: {
+    total: number;
+    running: number;
+    list: { name: string; status: string; image: string }[];
+  };
+  timestamp: string;
+}
+
+export function useSystemHealth() {
+  const [health, setHealth] = useState<SystemHealth | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const response = await fetch('/api/manager/health/system');
+      if (!response.ok) throw new Error('Failed to fetch health');
+      const data = await response.json();
+      setHealth(data);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  return { health, loading, error, refresh };
+}

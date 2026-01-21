@@ -76,6 +76,31 @@ services:
   #     - "3000"
 
   # ===========================================
+  # Project Manager (Container Orchestration)
+  # ===========================================
+  project-manager:
+    build:
+      context: ./project-manager
+      dockerfile: Dockerfile
+    container_name: vibes-project-manager
+    restart: unless-stopped
+    environment:
+      - PROJECTS_BASE=/home/vibes/projects
+      - DOCKER_NETWORK=vibes-network
+      - BASE_PORT=3010
+      - MAX_PROJECTS=10
+      - FRONTEND_IMAGE=deploy-frontend:latest
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /home/vibes/projects:/home/vibes/projects
+      - manager_data:/data
+    networks:
+      - vibes-network
+    expose:
+      - "3009"
+
+  # ===========================================
   # Vibes Dashboard (Activity Monitoring)
   # ===========================================
   dashboard:
@@ -175,6 +200,7 @@ volumes:
   caddy_config:
   kanban_data:
   dashboard_data:
+  manager_data:
   ollama_data:
   postgres_data:
   redis_data:
