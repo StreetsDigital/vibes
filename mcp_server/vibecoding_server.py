@@ -114,6 +114,52 @@ _quality_runner: Optional[QualityGateRunner] = None
 _bead_adapter: Optional["BeadFeatureAdapter"] = None  # Gastown adapter
 _use_beads: bool = False  # Runtime flag for backend selection
 
+# =============================================================================
+# THINKING PROMPTS - Encourage structured reasoning for new task types
+# =============================================================================
+
+THINKING_PROMPT = """
+## Thinking Guidance
+
+When encountering a **new task type** or **complex problem**, use structured thinking tools:
+
+1. **Sequential Thinking** (`sequential_thinking` MCP):
+   - Use for: step-by-step problem breakdown, planning, revising approaches
+   - Ideal for: implementation planning, debugging strategies, architecture decisions
+
+2. **Atom of Thoughts** (`AoT` or `AoT-light` MCP):
+   - Use for: decomposing complex problems into independent reasoning units
+   - Ideal for: analyzing requirements, verification, hypothesis testing
+
+### When to Think First:
+- Creating new MCPs, agents, skills, or hooks
+- Implementing features with unclear requirements
+- Debugging non-obvious issues
+- Making architectural decisions
+- Any task requiring multiple approaches or iterations
+
+### Example:
+Before implementing a complex feature, use `sequential_thinking` to:
+1. Break down the requirements
+2. Identify potential approaches
+3. Consider edge cases
+4. Plan the implementation order
+5. Define verification criteria
+"""
+
+def add_thinking_hint(result: Dict[str, Any], task_type: str = "feature") -> Dict[str, Any]:
+    """Add thinking guidance hint to task results."""
+    # Add hint for new features or complex tasks
+    if "id" in result or "features" in result:
+        result["thinking_hint"] = f"""
+Consider using thinking tools before starting:
+- `sequential_thinking` for step-by-step planning
+- `AoT` for decomposing complex requirements
+
+This helps ensure thorough implementation for: {task_type}
+"""
+    return result
+
 
 def init_database(project_dir: str) -> None:
     """Initialize database connection (SQLite or Beads)."""
@@ -182,6 +228,8 @@ def feature_get_next() -> Dict[str, Any]:
         result = _bead_adapter.get_next()
         if "id" in result:
             result["backend"] = "beads"
+            # Add thinking hint for new features
+            result = add_thinking_hint(result, f"feature: {result.get('name', 'unknown')}")
         return result
 
     # SQLite backend
@@ -210,7 +258,7 @@ def feature_get_next() -> Dict[str, Any]:
     ).first()
 
     if needs_review:
-        return {
+        result = {
             "id": needs_review.id,
             "name": needs_review.name,
             "description": needs_review.description,
@@ -220,6 +268,14 @@ def feature_get_next() -> Dict[str, Any]:
             "note": "Feature needs review before marking complete",
             "backend": "sqlite"
         }
+        # Add thinking hint for review - use AoT to analyze issues
+        result["thinking_hint"] = """
+This feature needs review. Consider using `AoT` (Atom of Thoughts) to:
+1. Analyze the verification notes systematically
+2. Identify root causes of failures
+3. Plan fixes with clear verification criteria
+"""
+        return result
 
     # Get next pending feature by priority
     next_feature = _db_session.query(Feature).filter(
@@ -231,7 +287,7 @@ def feature_get_next() -> Dict[str, Any]:
         next_feature.status = "in_progress"
         _db_session.commit()
 
-        return {
+        result = {
             "id": next_feature.id,
             "name": next_feature.name,
             "description": next_feature.description,
@@ -239,6 +295,9 @@ def feature_get_next() -> Dict[str, Any]:
             "status": "in_progress",
             "backend": "sqlite"
         }
+        # Add thinking hint for new features
+        result = add_thinking_hint(result, f"feature: {next_feature.name}")
+        return result
 
     return {"message": "All features complete!", "remaining": 0}
 

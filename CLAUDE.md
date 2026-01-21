@@ -356,6 +356,81 @@ feature_verify(id)
 
 ---
 
+## Thinking MCPs (Structured Reasoning)
+
+When encountering **new task types** or **complex problems**, use structured thinking tools before implementation.
+
+### Available Thinking MCPs
+
+| MCP | Tool | Purpose | Best For |
+|-----|------|---------|----------|
+| **Sequential Thinking** | `sequential_thinking` | Step-by-step reasoning with revision | Planning, debugging, architecture |
+| **Atom of Thoughts** | `AoT` / `AoT-light` | Decompose into atomic reasoning units | Analysis, verification, complex logic |
+
+### When to Think First
+
+Use thinking tools BEFORE starting work on:
+- **New MCPs** - Plan the tools, inputs, outputs
+- **New Agents** - Define scope, context requirements, handoff
+- **New Skills** - Identify triggers, solutions, verification
+- **New Hooks** - Understand events, side effects, error handling
+- **Complex Features** - Break down requirements, identify edge cases
+- **Debugging** - Analyze symptoms, form hypotheses, plan tests
+
+### Example: Using Sequential Thinking
+
+```
+# Before implementing a new MCP
+sequential_thinking({
+  thought: "I need to create an MCP for database migrations...",
+  thoughtNumber: 1,
+  totalThoughts: 5,
+  nextThoughtNeeded: true
+})
+
+# Continue thinking...
+sequential_thinking({
+  thought: "The MCP should expose tools for: list migrations, run up, run down, create new...",
+  thoughtNumber: 2,
+  totalThoughts: 5,
+  nextThoughtNeeded: true
+})
+```
+
+### Example: Using Atom of Thoughts
+
+```
+# For complex requirement analysis
+AoT({
+  problem: "Design authentication system with OAuth, JWT, and session management",
+  depth: 3  # Use 5 for full analysis, 3 for quick
+})
+
+# Returns decomposed atoms:
+# - Premise: What authentication requirements exist
+# - Reasoning: How OAuth/JWT/sessions interact
+# - Hypothesis: Proposed architecture
+# - Verification: How to test each component
+# - Conclusion: Recommended approach
+```
+
+### Installation (One-Click in Tools Panel)
+
+Expand "Thinking MCPs" section and click "Install" for:
+- `sequential-thinking` - Official MCP server
+- `atom-of-thoughts` - Community reasoning framework
+
+Or via CLI:
+```bash
+# Sequential Thinking
+npx -y @modelcontextprotocol/server-sequential-thinking
+
+# Atom of Thoughts
+npx -y @smithery/cli install @kbsooo/mcp_atom_of_thoughts --client claude
+```
+
+---
+
 ## Continuous Learning
 
 After debugging sessions or solving non-obvious problems, extract knowledge for future use.

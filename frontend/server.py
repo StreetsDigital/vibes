@@ -1166,6 +1166,210 @@ def update_hook():
 
 
 # ===========================================
+# Agents API
+# ===========================================
+
+# Agent templates with thinking MCPs
+AGENT_TEMPLATES = [
+    {
+        "id": "thinking",
+        "name": "Thinking Agent",
+        "description": "Uses structured reasoning for complex problems",
+        "mcps": ["sequential-thinking", "atom-of-thoughts"],
+        "prompt_prefix": "Think through this step-by-step using sequential_thinking tool:",
+    },
+    {
+        "id": "planner",
+        "name": "Planning Agent",
+        "description": "Plans implementation strategies before coding",
+        "mcps": ["sequential-thinking"],
+        "prompt_prefix": "Create a detailed plan for:",
+    },
+    {
+        "id": "reviewer",
+        "name": "Code Reviewer",
+        "description": "Reviews code for quality and issues",
+        "mcps": ["atom-of-thoughts"],
+        "prompt_prefix": "Analyze this code systematically:",
+    },
+    {
+        "id": "feature",
+        "name": "Feature Builder",
+        "description": "Implements features with quality gates",
+        "mcps": ["vibecoding"],
+        "prompt_prefix": "Implement this feature following quality gates:",
+    },
+]
+
+# Recommended MCPs for installation
+RECOMMENDED_MCPS = [
+    {
+        "name": "sequential-thinking",
+        "description": "Step-by-step reasoning with revision and branching",
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"],
+        "source": "https://github.com/modelcontextprotocol/servers/tree/main/src/sequentialthinking",
+    },
+    {
+        "name": "atom-of-thoughts",
+        "description": "Decomposition-based reasoning into atomic thought units",
+        "command": "npx",
+        "args": ["-y", "@smithery/cli", "install", "@kbsooo/mcp_atom_of_thoughts", "--client", "claude"],
+        "source": "https://github.com/kbsooo/MCP_Atom_of_Thoughts",
+    },
+    {
+        "name": "filesystem",
+        "description": "Full filesystem access with read/write/search",
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-filesystem", "/"],
+    },
+    {
+        "name": "github",
+        "description": "GitHub API integration for repos, PRs, issues",
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-github"],
+        "env": {"GITHUB_TOKEN": ""},
+    },
+    {
+        "name": "memory",
+        "description": "Persistent knowledge graph for context",
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-memory"],
+    },
+]
+
+
+@app.route('/api/claude/agents')
+@requires_auth
+def get_agents():
+    """Get agent templates and running agents."""
+    return jsonify({
+        "templates": AGENT_TEMPLATES,
+        "recommended_mcps": RECOMMENDED_MCPS,
+        "running": [],  # TODO: Track running subagents
+    })
+
+
+@app.route('/api/claude/agents/spawn', methods=['POST'])
+@requires_auth
+def spawn_agent():
+    """Spawn an agent with a specific template."""
+    data = request.json
+    template_id = data.get("template")
+    prompt = data.get("prompt", "")
+
+    template = next((t for t in AGENT_TEMPLATES if t["id"] == template_id), None)
+    if not template:
+        return jsonify({"error": "Template not found"}), 404
+
+    # Build the full prompt
+    full_prompt = f"{template['prompt_prefix']} {prompt}"
+
+    # Run through Claude (same as chat)
+    try:
+        response = run_claude_prompt(full_prompt, build_chat_context())
+        return jsonify({"success": True, "response": response})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/claude/recommended-mcps')
+@requires_auth
+def get_recommended_mcps():
+    """Get list of recommended MCPs for one-click install."""
+    # Check which are already installed
+    global_settings = load_claude_settings("global")
+    project_settings = load_claude_settings("project")
+    installed = set(global_settings.get("mcpServers", {}).keys()) | set(project_settings.get("mcpServers", {}).keys())
+
+    mcps = []
+    for mcp in RECOMMENDED_MCPS:
+        mcps.append({
+            **mcp,
+            "installed": mcp["name"] in installed
+        })
+
+    return jsonify({"mcps": mcps})
+
+
+@app.route('/api/claude/recommended-mcps/install', methods=['POST'])
+@requires_auth
+def install_recommended_mcp():
+    """Install a recommended MCP."""
+    data = request.json
+    name = data.get("name")
+    scope = data.get("scope", "global")
+
+    mcp = next((m for m in RECOMMENDED_MCPS if m["name"] == name), None)
+    if not mcp:
+        return jsonify({"error": "MCP not found"}), 404
+
+    settings = load_claude_settings(scope)
+    if "mcpServers" not in settings:
+        settings["mcpServers"] = {}
+
+    config = {
+        "command": mcp["command"],
+        "args": mcp["args"],
+    }
+    if mcp.get("env"):
+        config["env"] = mcp["env"]
+
+    settings["mcpServers"][name] = config
+    save_claude_settings(settings, scope)
+
+    return jsonify({"success": True, "name": name})
+
+
+# ===========================================
+# Quick Actions API
+# ===========================================
+
+@app.route('/api/actions/commit', methods=['POST'])
+@requires_auth
+def action_commit():
+    """Run commit action via Claude."""
+    return _run_slash_command("/commit")
+
+
+@app.route('/api/actions/pr', methods=['POST'])
+@requires_auth
+def action_pr():
+    """Run create PR action via Claude."""
+    return _run_slash_command("/pr")
+
+
+@app.route('/api/actions/verify', methods=['POST'])
+@requires_auth
+def action_verify():
+    """Run quality verification via Claude."""
+    return _run_slash_command("/verify")
+
+
+@app.route('/api/actions/retrospective', methods=['POST'])
+@requires_auth
+def action_retrospective():
+    """Run retrospective to extract learnings."""
+    return _run_slash_command("/retrospective")
+
+
+def _run_slash_command(command: str) -> Response:
+    """Run a slash command through Claude and return result."""
+    try:
+        response = run_claude_prompt(command, build_chat_context())
+
+        # Save to chat history
+        history = load_chat_history()
+        history.append({"role": "user", "content": command, "timestamp": datetime.now().isoformat()})
+        history.append({"role": "assistant", "content": response, "timestamp": datetime.now().isoformat()})
+        save_chat_history(history[-100:])
+
+        return jsonify({"success": True, "response": response})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ===========================================
 # Webhook endpoints (for Polecats)
 # ===========================================
 

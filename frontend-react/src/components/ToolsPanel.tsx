@@ -4,11 +4,42 @@ import { Modal } from './Modal';
 import type { McpServer, Skill, Tool, Hook, HookEvent } from '../types';
 import { useMcpServers, useSkills, useTools, useHooks } from '../hooks/useApi';
 
+// Agent types
+interface AgentTemplate {
+  id: string;
+  name: string;
+  description: string;
+  mcps: string[];
+  prompt_prefix: string;
+}
+
+interface RecommendedMcp {
+  name: string;
+  description: string;
+  command: string;
+  args: string[];
+  source?: string;
+  installed: boolean;
+}
+
 export function ToolsPanel() {
   const mcpApi = useMcpServers();
   const skillsApi = useSkills();
   const toolsApi = useTools();
   const hooksApi = useHooks();
+
+  // Agents state
+  const [agentTemplates, setAgentTemplates] = useState<AgentTemplate[]>([]);
+  const [recommendedMcps, setRecommendedMcps] = useState<RecommendedMcp[]>([]);
+  const [showAgentModal, setShowAgentModal] = useState(false);
+  const [selectedTemplate, setSelectedTemplate] = useState<AgentTemplate | null>(null);
+  const [agentPrompt, setAgentPrompt] = useState('');
+  const [agentLoading, setAgentLoading] = useState(false);
+  const [showRecommendedMcps, setShowRecommendedMcps] = useState(false);
+
+  // Quick actions state
+  const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [actionResult, setActionResult] = useState<{ action: string; response: string } | null>(null);
 
   // Modals
   const [showAddMcp, setShowAddMcp] = useState(false);
@@ -30,7 +61,87 @@ export function ToolsPanel() {
     skillsApi.load();
     toolsApi.load();
     hooksApi.load();
+    loadAgents();
+    loadRecommendedMcps();
   }, []);
+
+  // Load agents
+  const loadAgents = async () => {
+    try {
+      const response = await fetch('/api/claude/agents');
+      const data = await response.json();
+      setAgentTemplates(data.templates || []);
+    } catch (error) {
+      console.error('Failed to load agents:', error);
+    }
+  };
+
+  // Load recommended MCPs
+  const loadRecommendedMcps = async () => {
+    try {
+      const response = await fetch('/api/claude/recommended-mcps');
+      const data = await response.json();
+      setRecommendedMcps(data.mcps || []);
+    } catch (error) {
+      console.error('Failed to load recommended MCPs:', error);
+    }
+  };
+
+  // Spawn agent
+  const handleSpawnAgent = async () => {
+    if (!selectedTemplate || !agentPrompt.trim()) return;
+    setAgentLoading(true);
+    try {
+      const response = await fetch('/api/claude/agents/spawn', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ template: selectedTemplate.id, prompt: agentPrompt }),
+      });
+      const data = await response.json();
+      if (data.success) {
+        setActionResult({ action: selectedTemplate.name, response: data.response });
+      }
+    } catch (error) {
+      console.error('Failed to spawn agent:', error);
+    } finally {
+      setAgentLoading(false);
+      setShowAgentModal(false);
+      setAgentPrompt('');
+    }
+  };
+
+  // Install recommended MCP
+  const handleInstallMcp = async (name: string) => {
+    try {
+      const response = await fetch('/api/claude/recommended-mcps/install', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, scope: 'global' }),
+      });
+      if (response.ok) {
+        loadRecommendedMcps();
+        mcpApi.load();
+      }
+    } catch (error) {
+      console.error('Failed to install MCP:', error);
+    }
+  };
+
+  // Quick action handlers
+  const runQuickAction = async (action: string, label: string) => {
+    setActionLoading(action);
+    try {
+      const response = await fetch(`/api/actions/${action}`, { method: 'POST' });
+      const data = await response.json();
+      if (data.success) {
+        setActionResult({ action: label, response: data.response });
+      }
+    } catch (error) {
+      console.error(`Failed to run ${action}:`, error);
+    } finally {
+      setActionLoading(null);
+    }
+  };
 
   // Add MCP
   const handleAddMcp = async (e: Event) => {
@@ -209,14 +320,94 @@ export function ToolsPanel() {
         ))}
       </Section>
 
+      {/* Agents */}
+      <Section
+        title="Agents"
+        onAdd={() => setShowAgentModal(true)}
+        isEmpty={agentTemplates.length === 0}
+        emptyText="No agent templates"
+      >
+        {agentTemplates.map(template => (
+          <div
+            key={template.id}
+            className="p-2 bg-gray-800 rounded-lg cursor-pointer hover:bg-gray-700"
+            onClick={() => {
+              setSelectedTemplate(template);
+              setShowAgentModal(true);
+            }}
+          >
+            <div className="flex items-center justify-between">
+              <div className="text-sm font-medium">{template.name}</div>
+              <span className="text-xs px-1.5 py-0.5 bg-blue-600/20 text-blue-400 rounded">
+                {template.mcps.length} MCP{template.mcps.length !== 1 ? 's' : ''}
+              </span>
+            </div>
+            <div className="text-xs text-gray-500">{template.description}</div>
+          </div>
+        ))}
+      </Section>
+
+      {/* Recommended MCPs */}
+      <div className="p-4 border-b border-gray-700">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-sm font-medium text-gray-400">Thinking MCPs</h3>
+          <button
+            onClick={() => setShowRecommendedMcps(!showRecommendedMcps)}
+            className="text-xs px-2 py-1 bg-gray-700 rounded hover:bg-gray-600"
+          >
+            {showRecommendedMcps ? 'Hide' : 'Show'}
+          </button>
+        </div>
+        {showRecommendedMcps && (
+          <div className="space-y-2">
+            {recommendedMcps.map(mcp => (
+              <div key={mcp.name} className="p-2 bg-gray-800 rounded-lg">
+                <div className="flex items-center justify-between">
+                  <div className="text-sm font-medium">{mcp.name}</div>
+                  {mcp.installed ? (
+                    <span className="text-xs px-1.5 py-0.5 bg-green-600/20 text-green-400 rounded">
+                      Installed
+                    </span>
+                  ) : (
+                    <button
+                      onClick={() => handleInstallMcp(mcp.name)}
+                      className="text-xs px-2 py-1 bg-blue-600 text-white rounded hover:bg-blue-500"
+                    >
+                      Install
+                    </button>
+                  )}
+                </div>
+                <div className="text-xs text-gray-500 mt-1">{mcp.description}</div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
       {/* Quick Actions */}
       <div className="p-4">
         <h3 className="text-sm font-medium text-gray-400 mb-3">Quick Actions</h3>
         <div className="space-y-2">
-          <QuickAction onClick={() => {}} label="Commit changes" />
-          <QuickAction onClick={() => {}} label="Create PR" />
-          <QuickAction onClick={() => {}} label="Run quality checks" />
-          <QuickAction onClick={() => {}} label="Extract learnings" />
+          <QuickAction
+            onClick={() => runQuickAction('commit', 'Commit changes')}
+            label="Commit changes"
+            loading={actionLoading === 'commit'}
+          />
+          <QuickAction
+            onClick={() => runQuickAction('pr', 'Create PR')}
+            label="Create PR"
+            loading={actionLoading === 'pr'}
+          />
+          <QuickAction
+            onClick={() => runQuickAction('verify', 'Quality checks')}
+            label="Run quality checks"
+            loading={actionLoading === 'verify'}
+          />
+          <QuickAction
+            onClick={() => runQuickAction('retrospective', 'Extract learnings')}
+            label="Extract learnings"
+            loading={actionLoading === 'retrospective'}
+          />
         </div>
       </div>
 
@@ -484,6 +675,84 @@ export function ToolsPanel() {
           </div>
         )}
       </Modal>
+
+      {/* Spawn Agent Modal */}
+      <Modal isOpen={showAgentModal} onClose={() => setShowAgentModal(false)} title={selectedTemplate?.name || 'Spawn Agent'}>
+        <div className="space-y-4">
+          {!selectedTemplate ? (
+            <div className="space-y-2">
+              <p className="text-sm text-gray-400">Select an agent template:</p>
+              {agentTemplates.map(template => (
+                <button
+                  key={template.id}
+                  onClick={() => setSelectedTemplate(template)}
+                  className="w-full text-left p-3 bg-gray-800 rounded-lg hover:bg-gray-700"
+                >
+                  <div className="text-sm font-medium">{template.name}</div>
+                  <div className="text-xs text-gray-500">{template.description}</div>
+                </button>
+              ))}
+            </div>
+          ) : (
+            <>
+              <p className="text-sm text-gray-400">{selectedTemplate.description}</p>
+              <div className="text-xs text-gray-500">
+                Uses: {selectedTemplate.mcps.join(', ')}
+              </div>
+              <FormField label="What should this agent do?">
+                <textarea
+                  value={agentPrompt}
+                  onInput={(e) => setAgentPrompt((e.target as HTMLTextAreaElement).value)}
+                  rows={4}
+                  placeholder="Describe the task..."
+                  className="form-input"
+                />
+              </FormField>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => {
+                    setSelectedTemplate(null);
+                    setAgentPrompt('');
+                  }}
+                  className="flex-1 px-4 py-3 bg-gray-700 rounded-lg hover:bg-gray-600"
+                >
+                  Back
+                </button>
+                <button
+                  onClick={handleSpawnAgent}
+                  disabled={agentLoading || !agentPrompt.trim()}
+                  className="flex-1 px-4 py-3 bg-blue-600 rounded-lg hover:bg-blue-500 disabled:opacity-50"
+                >
+                  {agentLoading ? 'Running...' : 'Run Agent'}
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      </Modal>
+
+      {/* Action Result Modal */}
+      <Modal
+        isOpen={!!actionResult}
+        onClose={() => setActionResult(null)}
+        title={actionResult?.action || 'Result'}
+      >
+        {actionResult && (
+          <div className="space-y-4">
+            <div className="max-h-96 overflow-y-auto">
+              <pre className="text-sm text-gray-300 whitespace-pre-wrap bg-gray-800 p-3 rounded-lg">
+                {actionResult.response}
+              </pre>
+            </div>
+            <button
+              onClick={() => setActionResult(null)}
+              className="w-full px-4 py-3 bg-gray-700 rounded-lg hover:bg-gray-600"
+            >
+              Close
+            </button>
+          </div>
+        )}
+      </Modal>
     </div>
   );
 }
@@ -538,13 +807,17 @@ function ListItem({ title, subtitle, checked, onToggle, onClick }: {
   );
 }
 
-function QuickAction({ onClick, label }: { onClick: () => void; label: string }) {
+function QuickAction({ onClick, label, loading }: { onClick: () => void; label: string; loading?: boolean }) {
   return (
     <button
       onClick={onClick}
-      className="w-full text-left px-3 py-2 bg-gray-800 rounded-lg hover:bg-gray-700 text-sm"
+      disabled={loading}
+      className="w-full text-left px-3 py-2 bg-gray-800 rounded-lg hover:bg-gray-700 text-sm disabled:opacity-50 flex items-center justify-between"
     >
-      {label}
+      <span>{label}</span>
+      {loading && (
+        <span className="text-xs text-blue-400 animate-pulse">Running...</span>
+      )}
     </button>
   );
 }
