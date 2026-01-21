@@ -17,7 +17,23 @@
 
 # Main domain - Vibes Frontend (Kanban + Claude Chat)
 {$DOMAIN:localhost} {
-	# Frontend app
+	# Project manager API
+	handle /api/manager/* {
+		uri strip_prefix /api/manager
+		reverse_proxy project-manager:3009
+	}
+
+	# Dynamic project routing (vibes-project-{id} containers)
+	handle /project/* {
+		uri strip_prefix /project
+		# Extract project ID and route to its container
+		# Projects run on ports 3010-3019
+		reverse_proxy vibes-project-*:3000 {
+			lb_policy first
+		}
+	}
+
+	# Frontend app (default project)
 	reverse_proxy frontend:3000
 
 	# Security headers

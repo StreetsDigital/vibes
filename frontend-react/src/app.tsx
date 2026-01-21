@@ -1,18 +1,21 @@
 import { useState, useEffect } from 'preact/hooks';
 import type { ViewType, Task } from './types';
-import { useBoard, useChat, useProjects, useGit, useSession } from './hooks/useApi';
+import { useBoard, useChat, useProjects, useGit, useSession, useProjectManager } from './hooks/useApi';
 import { Board } from './components/Board';
 import { Chat } from './components/Chat';
 import { ToolsPanel } from './components/ToolsPanel';
+import { Modal } from './components/Modal';
 
 export function App() {
   const [currentView, setCurrentView] = useState<ViewType>('board');
+  const [showNewProjectModal, setShowNewProjectModal] = useState(false);
 
   const board = useBoard();
   const chat = useChat();
   const projects = useProjects();
   const git = useGit();
   const session = useSession();
+  const projectManager = useProjectManager();
 
   // Initialize on mount
   useEffect(() => {
@@ -20,6 +23,7 @@ export function App() {
     chat.loadHistory();
     projects.load();
     git.loadBranch();
+    projectManager.loadProjects();
     checkSession();
 
     // Refresh board every 10 seconds
@@ -54,12 +58,15 @@ export function App() {
             <ProjectDropdown
               projects={projects.projects}
               currentProject={projects.currentProject}
+              managedProjects={projectManager.managedProjects}
               onSwitch={async (path) => {
                 await projects.switchProject(path);
                 board.refresh();
                 chat.loadHistory();
                 git.loadBranch();
               }}
+              onOpenManaged={projectManager.openProject}
+              onNewProject={() => setShowNewProjectModal(true)}
             />
           </div>
           <div className="flex items-center gap-2">
@@ -158,6 +165,19 @@ export function App() {
           <ToolsPanel />
         </aside>
       </div>
+
+      {/* New Project Modal */}
+      <NewProjectModal
+        isOpen={showNewProjectModal}
+        onClose={() => setShowNewProjectModal(false)}
+        onCreate={async (name, gitUrl) => {
+          const result = await projectManager.createProject(name, gitUrl);
+          if (result.success && result.project) {
+            // Optionally open the new project
+            projectManager.openProject(result.project.id);
+          }
+        }}
+      />
     </div>
   );
 }
@@ -166,11 +186,17 @@ export function App() {
 function ProjectDropdown({
   projects,
   currentProject,
+  managedProjects,
   onSwitch,
+  onOpenManaged,
+  onNewProject,
 }: {
   projects: { name: string; path: string; current: boolean }[];
   currentProject: string;
+  managedProjects: { id: string; name: string; container_status: string }[];
   onSwitch: (path: string) => void;
+  onOpenManaged: (id: string) => void;
+  onNewProject: () => void;
 }) {
   const [isOpen, setIsOpen] = useState(false);
 
@@ -186,8 +212,10 @@ function ProjectDropdown({
         </svg>
       </button>
       {isOpen && (
-        <div className="absolute left-0 mt-1 w-48 bg-gray-800 border border-gray-700 rounded-lg shadow-lg z-50">
-          <div className="py-1 max-h-60 overflow-y-auto">
+        <div className="absolute left-0 mt-1 w-64 bg-gray-800 border border-gray-700 rounded-lg shadow-lg z-50">
+          <div className="py-1 max-h-80 overflow-y-auto">
+            {/* Current Project Section */}
+            <div className="px-3 py-1 text-xs text-gray-500 uppercase">Current</div>
             {projects.map((project) => (
               <button
                 key={project.path}
@@ -203,10 +231,146 @@ function ProjectDropdown({
                 {project.name}
               </button>
             ))}
+
+            {/* Managed Projects Section */}
+            {managedProjects.length > 0 && (
+              <>
+                <div className="border-t border-gray-700 my-1"></div>
+                <div className="px-3 py-1 text-xs text-gray-500 uppercase">Isolated Projects</div>
+                {managedProjects.map((proj) => (
+                  <button
+                    key={proj.id}
+                    onClick={() => {
+                      onOpenManaged(proj.id);
+                      setIsOpen(false);
+                    }}
+                    className="w-full text-left px-3 py-2 hover:bg-gray-700 text-sm flex items-center justify-between"
+                  >
+                    <span>{proj.name}</span>
+                    <span className={`text-xs px-1.5 py-0.5 rounded ${
+                      proj.container_status === 'running'
+                        ? 'bg-green-600/20 text-green-400'
+                        : 'bg-gray-600/20 text-gray-400'
+                    }`}>
+                      {proj.container_status}
+                    </span>
+                  </button>
+                ))}
+              </>
+            )}
+
+            {/* New Project Button */}
+            <div className="border-t border-gray-700 my-1"></div>
+            <button
+              onClick={() => {
+                onNewProject();
+                setIsOpen(false);
+              }}
+              className="w-full text-left px-3 py-2 hover:bg-gray-700 text-sm text-blue-400 flex items-center gap-2"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+              </svg>
+              New Isolated Project
+            </button>
           </div>
         </div>
       )}
     </div>
+  );
+}
+
+// New Project Modal
+function NewProjectModal({
+  isOpen,
+  onClose,
+  onCreate,
+}: {
+  isOpen: boolean;
+  onClose: () => void;
+  onCreate: (name: string, gitUrl?: string) => Promise<void>;
+}) {
+  const [name, setName] = useState('');
+  const [gitUrl, setGitUrl] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  const handleSubmit = async () => {
+    if (!name.trim()) {
+      setError('Project name is required');
+      return;
+    }
+    setLoading(true);
+    setError('');
+    try {
+      await onCreate(name.trim(), gitUrl.trim() || undefined);
+      setName('');
+      setGitUrl('');
+      onClose();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (!isOpen) return null;
+
+  return (
+    <Modal isOpen={isOpen} onClose={onClose} title="New Isolated Project">
+      <div className="space-y-4">
+        <p className="text-sm text-gray-400">
+          Create a new project in its own isolated Docker container.
+        </p>
+
+        <div>
+          <label className="block text-sm font-medium mb-1">Project Name</label>
+          <input
+            type="text"
+            value={name}
+            onInput={(e) => setName((e.target as HTMLInputElement).value)}
+            placeholder="my-awesome-project"
+            className="w-full bg-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium mb-1">Git URL (optional)</label>
+          <input
+            type="text"
+            value={gitUrl}
+            onInput={(e) => setGitUrl((e.target as HTMLInputElement).value)}
+            placeholder="https://github.com/user/repo.git"
+            className="w-full bg-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
+          <p className="text-xs text-gray-500 mt-1">
+            Leave empty to create a blank project
+          </p>
+        </div>
+
+        {error && (
+          <div className="text-sm text-red-400 bg-red-400/10 rounded-lg px-3 py-2">
+            {error}
+          </div>
+        )}
+
+        <div className="flex gap-2 justify-end">
+          <button
+            onClick={onClose}
+            className="px-4 py-2 text-sm bg-gray-700 rounded-lg hover:bg-gray-600"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleSubmit}
+            disabled={loading}
+            className="px-4 py-2 text-sm bg-blue-600 rounded-lg hover:bg-blue-500 disabled:opacity-50"
+          >
+            {loading ? 'Creating...' : 'Create Project'}
+          </button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 
