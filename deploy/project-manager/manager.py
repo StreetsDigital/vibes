@@ -11,12 +11,14 @@ API:
   DELETE /projects/:id     - Delete project
   POST /projects/:id/start - Start project container
   POST /projects/:id/stop  - Stop project container
+  GET  /health/system      - System health metrics
 """
 
 import os
 import json
 import subprocess
 import secrets
+import psutil
 from pathlib import Path
 from datetime import datetime
 from flask import Flask, request, jsonify
@@ -272,6 +274,99 @@ def stop_project(project_id: str):
         return jsonify({"success": True, "status": "stopped"})
     except docker.errors.NotFound:
         return jsonify({"success": True, "status": "not_running"})
+
+
+# ===========================================
+# System Health API
+# ===========================================
+
+@app.route("/health/system", methods=["GET"])
+def system_health():
+    """Get system health metrics."""
+    try:
+        # CPU
+        cpu_percent = psutil.cpu_percent(interval=0.5)
+        cpu_count = psutil.cpu_count()
+
+        # Memory
+        mem = psutil.virtual_memory()
+        mem_total_gb = mem.total / (1024**3)
+        mem_used_gb = mem.used / (1024**3)
+        mem_percent = mem.percent
+
+        # Disk
+        disk = psutil.disk_usage('/')
+        disk_total_gb = disk.total / (1024**3)
+        disk_used_gb = disk.used / (1024**3)
+        disk_percent = disk.percent
+
+        # Docker containers
+        containers = docker_client.containers.list(all=True)
+        vibes_containers = [c for c in containers if c.name.startswith('vibes-')]
+        running_containers = [c for c in vibes_containers if c.status == 'running']
+
+        # Container details
+        container_list = []
+        for c in vibes_containers:
+            container_list.append({
+                "name": c.name,
+                "status": c.status,
+                "image": c.image.tags[0] if c.image.tags else "unknown",
+            })
+
+        # Load average (Unix only)
+        try:
+            load_avg = os.getloadavg()
+            load_1m, load_5m, load_15m = load_avg
+        except (OSError, AttributeError):
+            load_1m = load_5m = load_15m = 0.0
+
+        # Determine health status
+        status = "healthy"
+        warnings = []
+
+        if cpu_percent > 80:
+            status = "warning"
+            warnings.append(f"High CPU usage: {cpu_percent}%")
+        if mem_percent > 85:
+            status = "warning"
+            warnings.append(f"High memory usage: {mem_percent}%")
+        if disk_percent > 90:
+            status = "critical"
+            warnings.append(f"Low disk space: {disk_percent}% used")
+        if mem_percent > 95:
+            status = "critical"
+            warnings.append(f"Critical memory usage: {mem_percent}%")
+
+        return jsonify({
+            "status": status,
+            "warnings": warnings,
+            "cpu": {
+                "percent": round(cpu_percent, 1),
+                "cores": cpu_count,
+                "load_1m": round(load_1m, 2),
+                "load_5m": round(load_5m, 2),
+                "load_15m": round(load_15m, 2),
+            },
+            "memory": {
+                "total_gb": round(mem_total_gb, 1),
+                "used_gb": round(mem_used_gb, 1),
+                "percent": round(mem_percent, 1),
+            },
+            "disk": {
+                "total_gb": round(disk_total_gb, 1),
+                "used_gb": round(disk_used_gb, 1),
+                "percent": round(disk_percent, 1),
+            },
+            "containers": {
+                "total": len(vibes_containers),
+                "running": len(running_containers),
+                "list": container_list,
+            },
+            "timestamp": datetime.now().isoformat(),
+        })
+    except Exception as e:
+        return jsonify({"status": "error", "error": str(e)}), 500
 
 
 # ===========================================

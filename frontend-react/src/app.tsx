@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'preact/hooks';
 import type { ViewType, Task } from './types';
-import { useBoard, useChat, useProjects, useGit, useSession, useProjectManager } from './hooks/useApi';
+import { useBoard, useChat, useProjects, useGit, useSession, useProjectManager, useSystemHealth } from './hooks/useApi';
 import { Board } from './components/Board';
 import { Chat } from './components/Chat';
 import { ToolsPanel } from './components/ToolsPanel';
@@ -9,6 +9,7 @@ import { Modal } from './components/Modal';
 export function App() {
   const [currentView, setCurrentView] = useState<ViewType>('board');
   const [showNewProjectModal, setShowNewProjectModal] = useState(false);
+  const [showHealthModal, setShowHealthModal] = useState(false);
 
   const board = useBoard();
   const chat = useChat();
@@ -16,6 +17,7 @@ export function App() {
   const git = useGit();
   const session = useSession();
   const projectManager = useProjectManager();
+  const systemHealth = useSystemHealth();
 
   // Initialize on mount
   useEffect(() => {
@@ -24,11 +26,16 @@ export function App() {
     projects.load();
     git.loadBranch();
     projectManager.loadProjects();
+    systemHealth.refresh();
     checkSession();
 
-    // Refresh board every 10 seconds
-    const interval = setInterval(board.refresh, 10000);
-    return () => clearInterval(interval);
+    // Refresh board every 10 seconds, health every 30 seconds
+    const boardInterval = setInterval(board.refresh, 10000);
+    const healthInterval = setInterval(systemHealth.refresh, 30000);
+    return () => {
+      clearInterval(boardInterval);
+      clearInterval(healthInterval);
+    };
   }, []);
 
   // Check session for welcome-back message
@@ -75,6 +82,35 @@ export function App() {
                 ? `${board.board.stats.passing}/${board.board.stats.total} complete (${board.board.stats.progress_percent}%)`
                 : 'Loading...'}
             </span>
+            {/* Health Indicator */}
+            <button
+              onClick={() => setShowHealthModal(true)}
+              className={`p-2 rounded-lg text-sm flex items-center gap-1 ${
+                systemHealth.health?.status === 'healthy'
+                  ? 'bg-green-600/20 text-green-400 hover:bg-green-600/30'
+                  : systemHealth.health?.status === 'warning'
+                  ? 'bg-yellow-600/20 text-yellow-400 hover:bg-yellow-600/30'
+                  : systemHealth.health?.status === 'critical'
+                  ? 'bg-red-600/20 text-red-400 hover:bg-red-600/30 animate-pulse'
+                  : 'bg-gray-700 text-gray-400 hover:bg-gray-600'
+              }`}
+              title={`System: ${systemHealth.health?.status || 'loading'}`}
+            >
+              <span className={`w-2 h-2 rounded-full ${
+                systemHealth.health?.status === 'healthy'
+                  ? 'bg-green-400'
+                  : systemHealth.health?.status === 'warning'
+                  ? 'bg-yellow-400'
+                  : systemHealth.health?.status === 'critical'
+                  ? 'bg-red-400'
+                  : 'bg-gray-400'
+              }`}></span>
+              <span className="hidden sm:inline text-xs">
+                {systemHealth.health
+                  ? `${systemHealth.health.memory.percent}%`
+                  : '...'}
+              </span>
+            </button>
             <button
               onClick={board.refresh}
               className="p-2 bg-gray-700 rounded-lg hover:bg-gray-600 active:bg-gray-500 text-sm"
@@ -177,6 +213,14 @@ export function App() {
             projectManager.openProject(result.project.id);
           }
         }}
+      />
+
+      {/* Health Modal */}
+      <HealthModal
+        isOpen={showHealthModal}
+        onClose={() => setShowHealthModal(false)}
+        health={systemHealth.health}
+        onRefresh={systemHealth.refresh}
       />
     </div>
   );
@@ -369,6 +413,148 @@ function NewProjectModal({
             {loading ? 'Creating...' : 'Create Project'}
           </button>
         </div>
+      </div>
+    </Modal>
+  );
+}
+
+// Health Modal
+import type { SystemHealth } from './hooks/useApi';
+
+function HealthModal({
+  isOpen,
+  onClose,
+  health,
+  onRefresh,
+}: {
+  isOpen: boolean;
+  onClose: () => void;
+  health: SystemHealth | null;
+  onRefresh: () => void;
+}) {
+  if (!isOpen) return null;
+
+  const statusColor = {
+    healthy: 'text-green-400',
+    warning: 'text-yellow-400',
+    critical: 'text-red-400',
+    error: 'text-red-400',
+  };
+
+  const ProgressBar = ({ percent, color }: { percent: number; color: string }) => (
+    <div className="w-full bg-gray-700 rounded-full h-2">
+      <div
+        className={`h-2 rounded-full ${color}`}
+        style={{ width: `${Math.min(percent, 100)}%` }}
+      />
+    </div>
+  );
+
+  return (
+    <Modal isOpen={isOpen} onClose={onClose} title="System Health">
+      <div className="space-y-4">
+        {!health ? (
+          <div className="text-center py-4 text-gray-400">Loading...</div>
+        ) : (
+          <>
+            {/* Status Badge */}
+            <div className="flex items-center justify-between">
+              <span className={`text-lg font-bold ${statusColor[health.status]}`}>
+                {health.status.toUpperCase()}
+              </span>
+              <button
+                onClick={onRefresh}
+                className="text-xs text-gray-400 hover:text-white"
+              >
+                Refresh
+              </button>
+            </div>
+
+            {/* Warnings */}
+            {health.warnings.length > 0 && (
+              <div className="bg-yellow-600/10 border border-yellow-600/30 rounded-lg p-3">
+                <div className="text-yellow-400 text-sm font-medium mb-1">Warnings</div>
+                {health.warnings.map((w, i) => (
+                  <div key={i} className="text-yellow-300/80 text-xs">{w}</div>
+                ))}
+              </div>
+            )}
+
+            {/* CPU */}
+            <div>
+              <div className="flex justify-between text-sm mb-1">
+                <span>CPU</span>
+                <span className="text-gray-400">
+                  {health.cpu.percent}% ({health.cpu.cores} cores)
+                </span>
+              </div>
+              <ProgressBar
+                percent={health.cpu.percent}
+                color={health.cpu.percent > 80 ? 'bg-red-500' : health.cpu.percent > 60 ? 'bg-yellow-500' : 'bg-green-500'}
+              />
+              <div className="text-xs text-gray-500 mt-1">
+                Load: {health.cpu.load_1m} / {health.cpu.load_5m} / {health.cpu.load_15m}
+              </div>
+            </div>
+
+            {/* Memory */}
+            <div>
+              <div className="flex justify-between text-sm mb-1">
+                <span>Memory</span>
+                <span className="text-gray-400">
+                  {health.memory.used_gb}GB / {health.memory.total_gb}GB ({health.memory.percent}%)
+                </span>
+              </div>
+              <ProgressBar
+                percent={health.memory.percent}
+                color={health.memory.percent > 85 ? 'bg-red-500' : health.memory.percent > 70 ? 'bg-yellow-500' : 'bg-green-500'}
+              />
+            </div>
+
+            {/* Disk */}
+            <div>
+              <div className="flex justify-between text-sm mb-1">
+                <span>Disk</span>
+                <span className="text-gray-400">
+                  {health.disk.used_gb}GB / {health.disk.total_gb}GB ({health.disk.percent}%)
+                </span>
+              </div>
+              <ProgressBar
+                percent={health.disk.percent}
+                color={health.disk.percent > 90 ? 'bg-red-500' : health.disk.percent > 80 ? 'bg-yellow-500' : 'bg-green-500'}
+              />
+            </div>
+
+            {/* Containers */}
+            <div>
+              <div className="flex justify-between text-sm mb-2">
+                <span>Containers</span>
+                <span className="text-gray-400">
+                  {health.containers.running} / {health.containers.total} running
+                </span>
+              </div>
+              <div className="space-y-1 max-h-32 overflow-y-auto">
+                {health.containers.list.map((c, i) => (
+                  <div key={i} className="flex items-center justify-between text-xs bg-gray-800 rounded px-2 py-1">
+                    <span className="truncate">{c.name}</span>
+                    <span className={`px-1.5 py-0.5 rounded ${
+                      c.status === 'running'
+                        ? 'bg-green-600/20 text-green-400'
+                        : 'bg-gray-600/20 text-gray-400'
+                    }`}>
+                      {c.status}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Timestamp */}
+            <div className="text-xs text-gray-500 text-center">
+              Last updated: {new Date(health.timestamp).toLocaleTimeString()}
+            </div>
+          </>
+        )}
       </div>
     </Modal>
   );

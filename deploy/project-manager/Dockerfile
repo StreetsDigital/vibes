@@ -4,7 +4,7 @@ FROM python:3.11-slim
 WORKDIR /app
 
 # Install dependencies
-RUN pip install --no-cache-dir flask docker
+RUN pip install --no-cache-dir flask docker psutil
 
 # Copy manager
 COPY manager.py /app/
