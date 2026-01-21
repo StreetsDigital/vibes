@@ -1,0 +1,59 @@
+{
+  "mcpServers": {
+    "atom-of-thoughts": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@kbsooo/mcp-atom-of-thoughts"
+      ],
+      "description": "Enhanced reasoning through atomic thought decomposition",
+      "env": {}
+    },
+    "sequential-thinking": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-sequentialthinking"
+      ],
+      "description": "Sequential reasoning chains for complex problem solving",
+      "env": {}
+    },
+    "vibecoding-orchestrator": {
+      "command": "python",
+      "args": [
+        "/home/vibes/vibes/mcp_server/vibecoding_server.py"
+      ],
+      "description": "Vibes autonomous coding orchestration layer",
+      "env": {
+        "PYTHONPATH": "/home/vibes/vibes/mcp_server"
+      }
+    },
+    "subagent-spawner": {
+      "command": "python",
+      "args": [
+        "/home/vibes/vibes/mcp_server/subagent_spawner.py"
+      ],
+      "description": "Claude subagent management and spawning",
+      "env": {
+        "PYTHONPATH": "/home/vibes/vibes/mcp_server"
+      }
+    },
+    "quality-gates": {
+      "command": "python",
+      "args": [
+        "/home/vibes/vibes/quality_gates/quality_server.py"
+      ],
+      "description": "Quality gate verification and enforcement",
+      "env": {
+        "PYTHONPATH": "/home/vibes/vibes"
+      }
+    }
+  },
+  "thinking": {
+    "enabled": true,
+    "preTaskAnalysis": true,
+    "complexityThreshold": 3,
+    "useAtomicThoughts": true,
+    "useSequentialReasoning": true
+  }
+}

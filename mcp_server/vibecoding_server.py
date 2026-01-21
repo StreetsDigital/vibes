@@ -83,6 +83,12 @@ from quality_gates import (
     CheckStatus
 )
 
+# Thinking enhancement integration
+import subprocess
+import tempfile
+import os
+from typing import Union
+
 
 # =============================================================================
 # DATABASE SETUP (Feature Management)
@@ -113,6 +119,7 @@ _project_dir: Optional[Path] = None
 _quality_runner: Optional[QualityGateRunner] = None
 _bead_adapter: Optional["BeadFeatureAdapter"] = None  # Gastown adapter
 _use_beads: bool = False  # Runtime flag for backend selection
+_thinking_enabled: bool = True  # Enable cognitive enhancement features
 
 
 def init_database(project_dir: str) -> None:
@@ -138,6 +145,172 @@ def init_database(project_dir: str) -> None:
 
     # Initialize quality runner (used by both backends)
     _quality_runner = QualityGateRunner(_project_dir)
+
+
+# =============================================================================
+# THINKING ENHANCEMENT FUNCTIONS
+# =============================================================================
+
+def assess_task_complexity(task_description: str) -> Dict[str, Any]:
+    """Assess whether a task requires enhanced cognitive processing."""
+    complexity_indicators = [
+        "multiple approaches", "unclear requirements", "architectural decision",
+        "complex logic", "integration", "optimization", "refactor",
+        "design pattern", "performance", "security", "new technology"
+    ]
+
+    description_lower = task_description.lower()
+    complexity_score = sum(1 for indicator in complexity_indicators if indicator in description_lower)
+
+    requires_thinking = complexity_score >= 2 or len(task_description.split()) > 30
+
+    return {
+        "complexity_score": complexity_score,
+        "requires_thinking": requires_thinking,
+        "indicators_found": [ind for ind in complexity_indicators if ind in description_lower],
+        "recommendation": "Use enhanced thinking" if requires_thinking else "Standard processing"
+    }
+
+
+def invoke_atomic_thoughts(task: str, context: str = "") -> Dict[str, Any]:
+    """Use MCP Atom of Thoughts for task decomposition."""
+    if not _thinking_enabled:
+        return {"error": "Thinking enhancement disabled"}
+
+    try:
+        # Create a temporary file for the thinking request
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+            thinking_request = {
+                "task": task,
+                "context": context,
+                "mode": "atomic_decomposition"
+            }
+            json.dump(thinking_request, f)
+            temp_file = f.name
+
+        # Invoke the Atom of Thoughts MCP server
+        result = subprocess.run(
+            ["npx", "-y", "@kbsooo/mcp-atom-of-thoughts", "analyze", temp_file],
+            capture_output=True,
+            text=True,
+            timeout=60
+        )
+
+        # Clean up temp file
+        os.unlink(temp_file)
+
+        if result.returncode == 0:
+            return {
+                "success": True,
+                "atomic_thoughts": result.stdout,
+                "approach": "decomposed"
+            }
+        else:
+            return {
+                "success": False,
+                "error": f"Atomic thoughts failed: {result.stderr}",
+                "fallback": "proceeding with standard approach"
+            }
+
+    except Exception as e:
+        return {
+            "success": False,
+            "error": f"Failed to invoke atomic thoughts: {str(e)}",
+            "fallback": "proceeding with standard approach"
+        }
+
+
+def invoke_sequential_thinking(steps: List[str], context: str = "") -> Dict[str, Any]:
+    """Use Sequential Thinking MCP for reasoning chains."""
+    if not _thinking_enabled:
+        return {"error": "Thinking enhancement disabled"}
+
+    try:
+        # Create reasoning chain input
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+            reasoning_request = {
+                "steps": steps,
+                "context": context,
+                "mode": "sequential_analysis"
+            }
+            json.dump(reasoning_request, f)
+            temp_file = f.name
+
+        # Invoke the Sequential Thinking MCP server
+        result = subprocess.run(
+            ["npx", "-y", "@modelcontextprotocol/server-sequentialthinking", "reason", temp_file],
+            capture_output=True,
+            text=True,
+            timeout=60
+        )
+
+        # Clean up temp file
+        os.unlink(temp_file)
+
+        if result.returncode == 0:
+            return {
+                "success": True,
+                "reasoning_chain": result.stdout,
+                "approach": "sequential"
+            }
+        else:
+            return {
+                "success": False,
+                "error": f"Sequential thinking failed: {result.stderr}",
+                "fallback": "proceeding with standard approach"
+            }
+
+    except Exception as e:
+        return {
+            "success": False,
+            "error": f"Failed to invoke sequential thinking: {str(e)}",
+            "fallback": "proceeding with standard approach"
+        }
+
+
+def enhanced_feature_analysis(feature: Dict[str, Any]) -> Dict[str, Any]:
+    """Enhanced feature analysis using thinking capabilities."""
+    if not _thinking_enabled:
+        return feature  # Return unchanged if thinking disabled
+
+    task_description = f"{feature.get('name', '')} - {feature.get('description', '')}"
+
+    # Assess complexity
+    complexity = assess_task_complexity(task_description)
+
+    if not complexity.get("requires_thinking"):
+        return {**feature, "thinking_analysis": complexity}
+
+    # Use atomic thoughts for decomposition
+    atomic_result = invoke_atomic_thoughts(
+        task_description,
+        context=json.dumps(feature.get("test_cases", []))
+    )
+
+    # Use sequential thinking for implementation planning
+    implementation_steps = [
+        "Analyze requirements",
+        "Design approach",
+        "Identify dependencies",
+        "Plan implementation order",
+        "Consider edge cases",
+        "Plan testing strategy"
+    ]
+
+    sequential_result = invoke_sequential_thinking(
+        implementation_steps,
+        context=f"Feature: {task_description}"
+    )
+
+    return {
+        **feature,
+        "thinking_analysis": {
+            "complexity": complexity,
+            "atomic_thoughts": atomic_result,
+            "sequential_reasoning": sequential_result,
+            "enhanced": True
+        }
+    }
 
 
 # =============================================================================
@@ -176,12 +349,15 @@ def feature_get_stats() -> Dict[str, Any]:
 
 
 def feature_get_next() -> Dict[str, Any]:
-    """Get the next feature to implement."""
+    """Get the next feature to implement with enhanced thinking analysis."""
     # Route to Beads backend if enabled
     if _use_beads and _bead_adapter:
         result = _bead_adapter.get_next()
         if "id" in result:
             result["backend"] = "beads"
+            # Apply enhanced thinking analysis
+            if "name" in result and "description" in result:
+                result = enhanced_feature_analysis(result)
         return result
 
     # SQLite backend
@@ -231,7 +407,7 @@ def feature_get_next() -> Dict[str, Any]:
         next_feature.status = "in_progress"
         _db_session.commit()
 
-        return {
+        feature_data = {
             "id": next_feature.id,
             "name": next_feature.name,
             "description": next_feature.description,
@@ -239,6 +415,9 @@ def feature_get_next() -> Dict[str, Any]:
             "status": "in_progress",
             "backend": "sqlite"
         }
+
+        # Apply enhanced thinking analysis
+        return enhanced_feature_analysis(feature_data)
 
     return {"message": "All features complete!", "remaining": 0}
 

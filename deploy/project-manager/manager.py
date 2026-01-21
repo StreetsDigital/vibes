@@ -280,7 +280,7 @@ def stop_project(project_id: str):
 # System Health API
 # ===========================================
 
-@app.route("/health/system", methods=["GET"])
+@app.route("/api/manager/health/system", methods=["GET"])
 def system_health():
     """Get system health metrics."""
     try:

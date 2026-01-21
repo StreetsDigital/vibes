@@ -80,5 +80,32 @@ export interface Hook {
 
 export type HookEvent = 'PreToolUse' | 'PostToolUse' | 'Notification' | 'Stop';
 
+// Agent types
+export interface SubAgent {
+  id: string;
+  status: 'running' | 'complete' | 'blocked';
+  feature_name: string;
+  duration: number;
+}
+
+export interface Polecat {
+  id: string;
+  machine_id: string;
+  status: string;
+  convoy_id: string;
+}
+
+export interface ContainerAgent {
+  name: string;
+  status: string;
+  project_id: string;
+}
+
+export interface AgentData {
+  subagents: SubAgent[];
+  polecats: Polecat[];
+  containers: ContainerAgent[];
+}
+
 // View types
 export type ViewType = 'board' | 'chat' | 'tools';

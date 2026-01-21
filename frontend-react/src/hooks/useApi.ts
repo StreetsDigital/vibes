@@ -1,7 +1,7 @@
 import { useState, useCallback } from 'preact/hooks';
 import type {
   Task, BoardData, ChatMessage, Project,
-  McpServer, Skill, Tool, Hook
+  McpServer, Skill, Tool, Hook, AgentData
 } from '../types';
 
 const API_BASE = '/api';
@@ -417,6 +417,28 @@ export function useProjectManager() {
     stopProject,
     openProject,
   };
+}
+
+// Agents API
+export function useAgents() {
+  const [agents, setAgents] = useState<AgentData | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const data = await apiFetch<AgentData>('/agents');
+      setAgents(data);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  return { agents, loading, error, load };
 }
 
 // System Health API

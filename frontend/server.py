@@ -1199,6 +1199,407 @@ def polecat_completed():
 
 
 # ===========================================
+# Agents API
+# ===========================================
+
+@app.route('/api/agents')
+@requires_auth
+def get_agents():
+    """Get information about running agents."""
+    result = {
+        "subagents": [],
+        "polecats": [],
+        "containers": []
+    }
+
+    try:
+        # Check for subagent processes
+        if _project_dir:
+            subagent_dir = _project_dir / ".git" / "vibes" / "subagents"
+            if subagent_dir.exists():
+                for pid_file in subagent_dir.glob("*.pid"):
+                    try:
+                        pid = int(pid_file.read_text().strip())
+                        # Check if process is still running
+                        import psutil
+                        if psutil.pid_exists(pid):
+                            proc = psutil.Process(pid)
+                            create_time = datetime.fromtimestamp(proc.create_time())
+                            duration = (datetime.now() - create_time).total_seconds()
+
+                            result["subagents"].append({
+                                "id": pid_file.stem,
+                                "status": "running",
+                                "feature_name": pid_file.stem.replace("_", " "),
+                                "duration": duration
+                            })
+                    except:
+                        # Clean up stale PID file
+                        try:
+                            pid_file.unlink()
+                        except:
+                            pass
+
+        # Check for Docker containers (project agents)
+        try:
+            import docker
+            docker_client = docker.from_env()
+            containers = docker_client.containers.list(all=True)
+
+            for container in containers:
+                # Look for vibes project containers
+                if container.name.startswith('vibes-project-'):
+                    project_id = container.labels.get('vibes.project', 'unknown')
+                    result["containers"].append({
+                        "name": container.name,
+                        "status": container.status,
+                        "project_id": project_id
+                    })
+        except:
+            # Docker not available or not accessible
+            pass
+
+        # Check for Polecat instances (Fly.io machines)
+        # This would typically query the Fly.io API or check local state files
+        polecat_state_dir = Path.home() / ".vibes" / "polecats"
+        if polecat_state_dir.exists():
+            for state_file in polecat_state_dir.glob("*.json"):
+                try:
+                    state = json.loads(state_file.read_text())
+                    result["polecats"].append({
+                        "id": state.get("id", state_file.stem),
+                        "machine_id": state.get("machine_id", "unknown"),
+                        "status": state.get("status", "unknown"),
+                        "convoy_id": state.get("convoy_id", "unknown")
+                    })
+                except:
+                    pass
+
+    except Exception as e:
+        print(f"[agents-api] Error gathering agent info: {e}")
+
+    return jsonify(result)
+
+
+# ===========================================
+# Quick Actions API
+# ===========================================
+
+@app.route('/api/skills/commit', methods=['POST'])
+@requires_auth
+def run_commit_skill():
+    """Run the commit skill."""
+    if not _project_dir:
+        return jsonify({"error": "No project directory"}), 500
+
+    try:
+        # Run Claude with the /commit skill
+        result = subprocess.run(
+            ["claude", "code", "/commit"],
+            capture_output=True,
+            text=True,
+            cwd=str(_project_dir),
+            timeout=300
+        )
+
+        if result.returncode == 0:
+            return jsonify({"success": True, "output": result.stdout})
+        else:
+            return jsonify({"error": f"Commit failed: {result.stderr}"}), 500
+
+    except subprocess.TimeoutExpired:
+        return jsonify({"error": "Commit operation timed out"}), 500
+    except FileNotFoundError:
+        return jsonify({"error": "Claude CLI not found"}), 500
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/skills/retrospective', methods=['POST'])
+@requires_auth
+def run_retrospective_skill():
+    """Run the retrospective skill."""
+    if not _project_dir:
+        return jsonify({"error": "No project directory"}), 500
+
+    try:
+        # Run Claude with the /retrospective skill
+        result = subprocess.run(
+            ["claude", "code", "/retrospective"],
+            capture_output=True,
+            text=True,
+            cwd=str(_project_dir),
+            timeout=300
+        )
+
+        if result.returncode == 0:
+            return jsonify({"success": True, "output": result.stdout})
+        else:
+            return jsonify({"error": f"Retrospective failed: {result.stderr}"}), 500
+
+    except subprocess.TimeoutExpired:
+        return jsonify({"error": "Retrospective operation timed out"}), 500
+    except FileNotFoundError:
+        return jsonify({"error": "Claude CLI not found"}), 500
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/git/create-pr', methods=['POST'])
+@requires_auth
+def create_pull_request():
+    """Create a pull request using git CLI."""
+    if not _project_dir:
+        return jsonify({"error": "No project directory"}), 500
+
+    try:
+        # Check if gh CLI is available
+        subprocess.run(["gh", "--version"], capture_output=True, check=True)
+
+        # Get current branch
+        branch_result = subprocess.run(
+            ["git", "branch", "--show-current"],
+            capture_output=True,
+            text=True,
+            cwd=str(_project_dir)
+        )
+        current_branch = branch_result.stdout.strip()
+
+        if not current_branch or current_branch == "main" or current_branch == "master":
+            return jsonify({"error": "Cannot create PR from main/master branch"}), 400
+
+        # Create PR using gh CLI
+        pr_result = subprocess.run(
+            ["gh", "pr", "create", "--fill"],
+            capture_output=True,
+            text=True,
+            cwd=str(_project_dir),
+            timeout=60
+        )
+
+        if pr_result.returncode == 0:
+            return jsonify({"success": True, "output": pr_result.stdout.strip()})
+        else:
+            return jsonify({"error": f"PR creation failed: {pr_result.stderr}"}), 500
+
+    except FileNotFoundError:
+        return jsonify({"error": "GitHub CLI (gh) not found. Please install it first."}), 500
+    except subprocess.CalledProcessError:
+        return jsonify({"error": "GitHub CLI not available or not authenticated"}), 500
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/quality/check', methods=['POST'])
+@requires_auth
+def run_quality_checks():
+    """Run quality checks using quality gate tools."""
+    if not _project_dir:
+        return jsonify({"error": "No project directory"}), 500
+
+    try:
+        # Try to run quality_check via MCP/Claude if available
+        quality_result = subprocess.run(
+            ["claude", "code", "/verify"],
+            capture_output=True,
+            text=True,
+            cwd=str(_project_dir),
+            timeout=180
+        )
+
+        if quality_result.returncode == 0:
+            return jsonify({"success": True, "output": quality_result.stdout})
+        else:
+            # Fall back to basic checks
+            checks = []
+
+            # Run basic linting/type checks if tools are available
+            try:
+                # Try npm run lint
+                lint_result = subprocess.run(
+                    ["npm", "run", "lint"],
+                    capture_output=True,
+                    text=True,
+                    cwd=str(_project_dir),
+                    timeout=60
+                )
+                checks.append(f"Lint: {'✅ Passed' if lint_result.returncode == 0 else '❌ Failed'}")
+
+                # Try npm run type-check
+                type_result = subprocess.run(
+                    ["npm", "run", "type-check"],
+                    capture_output=True,
+                    text=True,
+                    cwd=str(_project_dir),
+                    timeout=60
+                )
+                checks.append(f"Types: {'✅ Passed' if type_result.returncode == 0 else '❌ Failed'}")
+
+                # Try npm test
+                test_result = subprocess.run(
+                    ["npm", "test", "--", "--passWithNoTests"],
+                    capture_output=True,
+                    text=True,
+                    cwd=str(_project_dir),
+                    timeout=120
+                )
+                checks.append(f"Tests: {'✅ Passed' if test_result.returncode == 0 else '❌ Failed'}")
+
+            except Exception:
+                checks.append("Basic checks not available")
+
+            return jsonify({
+                "success": True,
+                "output": f"Quality checks completed:\n" + "\n".join(checks)
+            })
+
+    except subprocess.TimeoutExpired:
+        return jsonify({"error": "Quality check timed out"}), 500
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ===========================================
+# Configuration Helper API
+# ===========================================
+
+# Configuration file mappings
+CONFIG_ROUTES = {
+    "quality gates": {
+        "patterns": ["quality", "gates", "lint", "test", "checks", "verification", "qa"],
+        "file_path": "/home/vibes/vibes/quality-gate.config.json",
+        "description": "Quality gates configuration - controls lint, test, and verification settings"
+    },
+    "claude settings": {
+        "patterns": ["claude", "settings", "config", "anthropic", "api"],
+        "file_path": "/home/vibes/vibes/.claude/settings.json",
+        "description": "Claude Code settings - API configuration, model preferences, and behavior"
+    },
+    "mcp servers": {
+        "patterns": ["mcp", "servers", "tools", "plugins", "model context protocol"],
+        "file_path": "/home/vibes/vibes/.claude/mcp_servers.json",
+        "description": "MCP servers configuration - available tools and plugins"
+    },
+    "git hooks": {
+        "patterns": ["git", "hooks", "pre-commit", "post-commit", "automation"],
+        "file_path": "/home/vibes/vibes/hooks/",
+        "description": "Git hooks directory - automated scripts that run on git events"
+    },
+    "docker compose": {
+        "patterns": ["docker", "compose", "containers", "services", "deployment"],
+        "file_path": "/home/vibes/vibes/docker-compose.yml",
+        "description": "Docker Compose configuration - service definitions and deployment"
+    },
+    "package json": {
+        "patterns": ["npm", "package", "dependencies", "scripts", "build"],
+        "file_path": "/home/vibes/vibes/package.json",
+        "description": "Package configuration - dependencies, scripts, and project metadata"
+    },
+    "eslint config": {
+        "patterns": ["eslint", "linting", "code style", "javascript", "typescript"],
+        "file_path": "/home/vibes/vibes/.eslintrc.js",
+        "description": "ESLint configuration - JavaScript/TypeScript linting rules"
+    },
+    "prettier config": {
+        "patterns": ["prettier", "formatting", "code format", "style"],
+        "file_path": "/home/vibes/vibes/.prettierrc",
+        "description": "Prettier configuration - automatic code formatting settings"
+    },
+    "typescript config": {
+        "patterns": ["typescript", "tsconfig", "types", "compilation"],
+        "file_path": "/home/vibes/vibes/tsconfig.json",
+        "description": "TypeScript configuration - compilation settings and type checking"
+    },
+    "vite config": {
+        "patterns": ["vite", "build tool", "frontend build", "development server"],
+        "file_path": "/home/vibes/vibes/vite.config.ts",
+        "description": "Vite configuration - build tool and development server settings"
+    }
+}
+
+
+@app.route('/api/config/route', methods=['POST'])
+@requires_auth
+def route_config_request():
+    """Route a natural language config request to the appropriate file."""
+    data = request.json
+    query = data.get("query", "").lower()
+
+    if not query:
+        return jsonify({"error": "Query is required"}), 400
+
+    # Score each config route based on pattern matching
+    best_match = None
+    best_score = 0
+
+    for config_name, config_info in CONFIG_ROUTES.items():
+        score = 0
+        patterns = config_info["patterns"]
+
+        # Count matching patterns
+        for pattern in patterns:
+            if pattern in query:
+                score += 1
+                # Bonus for exact matches
+                if pattern == query.strip():
+                    score += 2
+
+        # Bonus for matching the config name itself
+        if config_name.lower() in query:
+            score += 3
+
+        if score > best_score:
+            best_score = score
+            best_match = (config_name, config_info)
+
+    if not best_match or best_score == 0:
+        # Fallback - suggest most common config files
+        return jsonify({
+            "file_path": "/home/vibes/vibes/.claude/settings.json",
+            "description": "No specific match found. Try: 'quality gates', 'mcp servers', 'git hooks', 'claude settings'",
+            "suggested_change": "Be more specific about what you want to configure"
+        })
+
+    config_name, config_info = best_match
+    file_path = config_info["file_path"]
+
+    # Check if file exists and adjust path if needed
+    if _project_dir:
+        relative_path = file_path.replace("/home/vibes/vibes/", "")
+        project_file_path = _project_dir / relative_path
+        if project_file_path.exists():
+            file_path = str(project_file_path)
+
+    # Generate suggested changes based on common requests
+    suggested_change = None
+    if "add" in query and "mcp" in query:
+        suggested_change = 'Add new MCP server: {"name": {"command": "your-command", "args": []}}'
+    elif "quality" in query and ("enable" in query or "disable" in query):
+        suggested_change = 'Modify "enabled" field or add to "deniedTools" array'
+    elif "hook" in query:
+        suggested_change = 'Add git hook script or modify existing hook permissions'
+    elif "docker" in query:
+        suggested_change = 'Modify service definitions or add new services'
+
+    # Determine section if it's a JSON file
+    section = None
+    if file_path.endswith('.json'):
+        if "mcp" in query:
+            section = "mcpServers"
+        elif "hook" in query:
+            section = "hooks"
+        elif "tool" in query:
+            section = "deniedTools"
+
+    return jsonify({
+        "file_path": file_path,
+        "section": section,
+        "description": config_info["description"],
+        "suggested_change": suggested_change
+    })
+
+
+# ===========================================
 # Main
 # ===========================================
 

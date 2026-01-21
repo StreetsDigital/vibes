@@ -1,23 +1,30 @@
 import { useState, useEffect } from 'preact/hooks';
 import { Toggle } from './Toggle';
 import { Modal } from './Modal';
+import { ConfigHelper } from './ConfigHelper';
 import type { McpServer, Skill, Tool, Hook, HookEvent } from '../types';
-import { useMcpServers, useSkills, useTools, useHooks } from '../hooks/useApi';
+import { useMcpServers, useSkills, useTools, useHooks, useAgents } from '../hooks/useApi';
 
 export function ToolsPanel() {
   const mcpApi = useMcpServers();
   const skillsApi = useSkills();
   const toolsApi = useTools();
   const hooksApi = useHooks();
+  const agentsApi = useAgents();
 
   // Modals
   const [showAddMcp, setShowAddMcp] = useState(false);
   const [showAddSkill, setShowAddSkill] = useState(false);
   const [showAddHook, setShowAddHook] = useState(false);
+  const [showConfigHelper, setShowConfigHelper] = useState(false);
   const [selectedMcp, setSelectedMcp] = useState<McpServer | null>(null);
   const [selectedSkill, setSelectedSkill] = useState<{ skill: Skill; content: string } | null>(null);
   const [selectedTool, setSelectedTool] = useState<Tool | null>(null);
   const [selectedHook, setSelectedHook] = useState<Hook | null>(null);
+
+  // Quick Actions state
+  const [actionStates, setActionStates] = useState<Record<string, 'idle' | 'loading' | 'success' | 'error'>>({});
+  const [actionErrors, setActionErrors] = useState<Record<string, string>>({});
 
   // Forms
   const [mcpForm, setMcpForm] = useState<{ name: string; command: string; args: string; scope: 'project' | 'global' }>({ name: '', command: '', args: '', scope: 'project' });
@@ -30,6 +37,7 @@ export function ToolsPanel() {
     skillsApi.load();
     toolsApi.load();
     hooksApi.load();
+    agentsApi.load();
   }, []);
 
   // Add MCP
@@ -121,6 +129,57 @@ export function ToolsPanel() {
     setSelectedHook(null);
   };
 
+  // Quick Actions handlers
+  const executeQuickAction = async (actionName: string, action: () => Promise<void>) => {
+    setActionStates(prev => ({ ...prev, [actionName]: 'loading' }));
+    setActionErrors(prev => ({ ...prev, [actionName]: '' }));
+
+    try {
+      await action();
+      setActionStates(prev => ({ ...prev, [actionName]: 'success' }));
+      // Clear success state after 3 seconds
+      setTimeout(() => {
+        setActionStates(prev => ({ ...prev, [actionName]: 'idle' }));
+      }, 3000);
+    } catch (error) {
+      setActionStates(prev => ({ ...prev, [actionName]: 'error' }));
+      setActionErrors(prev => ({ ...prev, [actionName]: (error as Error).message }));
+      // Clear error state after 5 seconds
+      setTimeout(() => {
+        setActionStates(prev => ({ ...prev, [actionName]: 'idle' }));
+        setActionErrors(prev => ({ ...prev, [actionName]: '' }));
+      }, 5000);
+    }
+  };
+
+  const handleCommitChanges = () => {
+    executeQuickAction('commit', async () => {
+      const response = await fetch('/api/skills/commit', { method: 'POST' });
+      if (!response.ok) throw new Error('Failed to commit changes');
+    });
+  };
+
+  const handleCreatePR = () => {
+    executeQuickAction('pr', async () => {
+      const response = await fetch('/api/git/create-pr', { method: 'POST' });
+      if (!response.ok) throw new Error('Failed to create PR');
+    });
+  };
+
+  const handleRunQualityChecks = () => {
+    executeQuickAction('quality', async () => {
+      const response = await fetch('/api/quality/check', { method: 'POST' });
+      if (!response.ok) throw new Error('Quality checks failed');
+    });
+  };
+
+  const handleExtractLearnings = () => {
+    executeQuickAction('retrospective', async () => {
+      const response = await fetch('/api/skills/retrospective', { method: 'POST' });
+      if (!response.ok) throw new Error('Failed to extract learnings');
+    });
+  };
+
   return (
     <div className="flex-1 overflow-y-auto">
       <div className="p-4 border-b border-gray-700">
@@ -209,14 +268,95 @@ export function ToolsPanel() {
         ))}
       </Section>
 
+      {/* Agents */}
+      <Section title="Agents" isEmpty={!agentsApi.agents || (agentsApi.agents.subagents.length === 0 && agentsApi.agents.polecats.length === 0 && agentsApi.agents.containers.length === 0)} emptyText="No active agents">
+        {agentsApi.agents && (
+          <div className="space-y-2">
+            {/* Subagents */}
+            {agentsApi.agents.subagents.map(agent => (
+              <div key={agent.id} className="p-2 bg-gray-800 rounded-lg">
+                <div className="flex items-center justify-between">
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-medium truncate">{agent.feature_name || agent.id}</div>
+                    <div className="text-xs text-gray-500">Subagent • {Math.round(agent.duration)}s • {agent.status}</div>
+                  </div>
+                  <div className={`w-2 h-2 rounded-full ${
+                    agent.status === 'running' ? 'bg-green-400' :
+                    agent.status === 'complete' ? 'bg-blue-400' : 'bg-yellow-400'
+                  }`}></div>
+                </div>
+              </div>
+            ))}
+
+            {/* Polecats */}
+            {agentsApi.agents.polecats.map(polecat => (
+              <div key={polecat.id} className="p-2 bg-gray-800 rounded-lg">
+                <div className="flex items-center justify-between">
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-medium truncate">Polecat {polecat.id}</div>
+                    <div className="text-xs text-gray-500">Machine {polecat.machine_id} • Convoy {polecat.convoy_id}</div>
+                  </div>
+                  <div className="text-xs text-gray-400">{polecat.status}</div>
+                </div>
+              </div>
+            ))}
+
+            {/* Container Agents */}
+            {agentsApi.agents.containers.map(container => (
+              <div key={container.name} className="p-2 bg-gray-800 rounded-lg">
+                <div className="flex items-center justify-between">
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-medium truncate">{container.name}</div>
+                    <div className="text-xs text-gray-500">Container • Project {container.project_id}</div>
+                  </div>
+                  <div className="text-xs text-gray-400">{container.status}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+        {agentsApi.loading && <div className="text-sm text-gray-500">Loading agents...</div>}
+        {agentsApi.error && <div className="text-sm text-red-400">Error: {agentsApi.error}</div>}
+      </Section>
+
       {/* Quick Actions */}
       <div className="p-4">
         <h3 className="text-sm font-medium text-gray-400 mb-3">Quick Actions</h3>
         <div className="space-y-2">
-          <QuickAction onClick={() => {}} label="Commit changes" />
-          <QuickAction onClick={() => {}} label="Create PR" />
-          <QuickAction onClick={() => {}} label="Run quality checks" />
-          <QuickAction onClick={() => {}} label="Extract learnings" />
+          <QuickActionWithState
+            onClick={handleCommitChanges}
+            label="Commit changes"
+            state={actionStates.commit || 'idle'}
+            error={actionErrors.commit}
+          />
+          <QuickActionWithState
+            onClick={handleCreatePR}
+            label="Create PR"
+            state={actionStates.pr || 'idle'}
+            error={actionErrors.pr}
+          />
+          <QuickActionWithState
+            onClick={handleRunQualityChecks}
+            label="Run quality checks"
+            state={actionStates.quality || 'idle'}
+            error={actionErrors.quality}
+          />
+          <QuickActionWithState
+            onClick={handleExtractLearnings}
+            label="Extract learnings"
+            state={actionStates.retrospective || 'idle'}
+            error={actionErrors.retrospective}
+          />
+          <button
+            onClick={() => setShowConfigHelper(true)}
+            className="w-full text-left px-3 py-2 bg-gray-800 rounded-lg hover:bg-gray-700 text-sm flex items-center justify-between"
+          >
+            <span>Configuration Helper</span>
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+            </svg>
+          </button>
         </div>
       </div>
 
@@ -484,6 +624,12 @@ export function ToolsPanel() {
           </div>
         )}
       </Modal>
+
+      {/* Configuration Helper */}
+      <ConfigHelper
+        isOpen={showConfigHelper}
+        onClose={() => setShowConfigHelper(false)}
+      />
     </div>
   );
 }
@@ -546,6 +692,73 @@ function QuickAction({ onClick, label }: { onClick: () => void; label: string })
     >
       {label}
     </button>
+  );
+}
+
+function QuickActionWithState({
+  onClick,
+  label,
+  state,
+  error
+}: {
+  onClick: () => void;
+  label: string;
+  state: 'idle' | 'loading' | 'success' | 'error';
+  error?: string;
+}) {
+  const getStateIcon = () => {
+    switch (state) {
+      case 'loading':
+        return (
+          <svg className="w-4 h-4 animate-spin text-blue-400" fill="none" viewBox="0 0 24 24">
+            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+            <path className="opacity-75" fill="currentColor" d="m4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+          </svg>
+        );
+      case 'success':
+        return (
+          <svg className="w-4 h-4 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+          </svg>
+        );
+      case 'error':
+        return (
+          <svg className="w-4 h-4 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        );
+      default:
+        return null;
+    }
+  };
+
+  const getButtonColor = () => {
+    switch (state) {
+      case 'success':
+        return 'bg-green-800/20 hover:bg-green-700/30 border border-green-600/30';
+      case 'error':
+        return 'bg-red-800/20 hover:bg-red-700/30 border border-red-600/30';
+      default:
+        return 'bg-gray-800 hover:bg-gray-700';
+    }
+  };
+
+  return (
+    <div>
+      <button
+        onClick={onClick}
+        disabled={state === 'loading'}
+        className={`w-full text-left px-3 py-2 rounded-lg text-sm flex items-center justify-between ${getButtonColor()}`}
+      >
+        <span>{label}</span>
+        {getStateIcon()}
+      </button>
+      {state === 'error' && error && (
+        <div className="mt-1 px-3 py-1 text-xs text-red-400 bg-red-900/20 rounded">
+          {error}
+        </div>
+      )}
+    </div>
   );
 }
 
