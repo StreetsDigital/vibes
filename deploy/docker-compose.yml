@@ -50,6 +50,7 @@ services:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
     volumes:
       - projects:/projects
+      - claude_credentials:/root/.claude
     networks:
       - vibes-network
     expose:
@@ -204,6 +205,7 @@ volumes:
   ollama_data:
   postgres_data:
   redis_data:
+  claude_credentials:
   projects:
     driver: local
     driver_opts:

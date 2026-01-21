@@ -194,6 +194,7 @@ def _create_container(project_id: str, port: int, project_dir: Path):
         },
         volumes={
             str(project_dir): {"bind": "/projects", "mode": "rw"},
+            "deploy_claude_credentials": {"bind": "/root/.claude", "mode": "rw"},
         },
         network=NETWORK_NAME,
         labels={
