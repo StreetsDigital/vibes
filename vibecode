@@ -5,6 +5,7 @@
 # One script to rule them all
 #
 # Usage:
+#   vibecode setup                   - Interactive credential setup (first time)
 #   vibecode init                    - Install claudebox + vibecoding stack
 #   vibecode new <project> [profile] - Create new isolated project
 #   vibecode shell <project>         - Enter project environment
@@ -209,6 +210,176 @@ cmd_lightsail() {
 }
 
 # =============================================================================
+# INTERACTIVE SETUP
+# =============================================================================
+
+cmd_setup() {
+    show_banner
+    echo "Interactive Setup - Configure all credentials"
+    echo ""
+    echo "This will set up:"
+    echo "  1. AWS credentials (for Lightsail port management)"
+    echo "  2. OpenAI API key (for /codex-review)"
+    echo ""
+
+    # Check what's already configured
+    AWS_CONFIGURED=false
+    OPENAI_CONFIGURED=false
+
+    if [ -f "$HOME/.aws/credentials" ] && grep -q "aws_access_key_id" "$HOME/.aws/credentials" 2>/dev/null; then
+        AWS_CONFIGURED=true
+    fi
+
+    if [ -f "$HOME/.config/openai/api_key" ] && [ -s "$HOME/.config/openai/api_key" ]; then
+        OPENAI_CONFIGURED=true
+    fi
+
+    # Status
+    echo "Current status:"
+    if $AWS_CONFIGURED; then
+        echo -e "  ${GREEN}✓${NC} AWS credentials configured"
+    else
+        echo -e "  ${YELLOW}○${NC} AWS credentials not configured"
+    fi
+
+    if $OPENAI_CONFIGURED; then
+        echo -e "  ${GREEN}✓${NC} OpenAI API key configured"
+    else
+        echo -e "  ${YELLOW}○${NC} OpenAI API key not configured"
+    fi
+    echo ""
+
+    # AWS Setup
+    if ! $AWS_CONFIGURED; then
+        echo "─────────────────────────────────────────────────────"
+        echo "AWS Credentials (for Lightsail port management)"
+        echo "─────────────────────────────────────────────────────"
+        echo ""
+        echo "You need an IAM user with Lightsail permissions."
+        echo "Create one at: https://console.aws.amazon.com/iam"
+        echo ""
+        read -p "Do you have AWS Access Key ID and Secret? (y/n): " HAS_AWS
+
+        if [ "$HAS_AWS" = "y" ] || [ "$HAS_AWS" = "Y" ]; then
+            read -p "AWS Access Key ID: " AWS_KEY_ID
+            read -p "AWS Secret Access Key: " AWS_SECRET
+            read -p "AWS Region (e.g., eu-west-1): " AWS_REGION
+
+            if [ -n "$AWS_KEY_ID" ] && [ -n "$AWS_SECRET" ]; then
+                mkdir -p "$HOME/.aws"
+                cat > "$HOME/.aws/credentials" << EOF
+[default]
+aws_access_key_id = $AWS_KEY_ID
+aws_secret_access_key = $AWS_SECRET
+EOF
+                cat > "$HOME/.aws/config" << EOF
+[default]
+region = ${AWS_REGION:-us-east-1}
+output = json
+EOF
+                chmod 600 "$HOME/.aws/credentials"
+                echo_success "AWS credentials saved"
+            else
+                echo_warning "Skipped - no credentials provided"
+            fi
+        else
+            echo_info "Skipping AWS setup"
+        fi
+        echo ""
+    else
+        read -p "AWS already configured. Reconfigure? (y/n): " RECONFIG_AWS
+        if [ "$RECONFIG_AWS" = "y" ]; then
+            read -p "AWS Access Key ID: " AWS_KEY_ID
+            read -p "AWS Secret Access Key: " AWS_SECRET
+            read -p "AWS Region (e.g., eu-west-1): " AWS_REGION
+
+            if [ -n "$AWS_KEY_ID" ] && [ -n "$AWS_SECRET" ]; then
+                mkdir -p "$HOME/.aws"
+                cat > "$HOME/.aws/credentials" << EOF
+[default]
+aws_access_key_id = $AWS_KEY_ID
+aws_secret_access_key = $AWS_SECRET
+EOF
+                cat > "$HOME/.aws/config" << EOF
+[default]
+region = ${AWS_REGION:-us-east-1}
+output = json
+EOF
+                chmod 600 "$HOME/.aws/credentials"
+                echo_success "AWS credentials updated"
+            fi
+        fi
+        echo ""
+    fi
+
+    # OpenAI Setup
+    if ! $OPENAI_CONFIGURED; then
+        echo "─────────────────────────────────────────────────────"
+        echo "OpenAI API Key (for /codex-review bug detection)"
+        echo "─────────────────────────────────────────────────────"
+        echo ""
+        echo "Get your API key at: https://platform.openai.com/api-keys"
+        echo ""
+        read -p "Do you have an OpenAI API key? (y/n): " HAS_OPENAI
+
+        if [ "$HAS_OPENAI" = "y" ] || [ "$HAS_OPENAI" = "Y" ]; then
+            read -p "OpenAI API Key: " OPENAI_KEY
+
+            if [ -n "$OPENAI_KEY" ]; then
+                mkdir -p "$HOME/.config/openai"
+                echo "$OPENAI_KEY" > "$HOME/.config/openai/api_key"
+                chmod 600 "$HOME/.config/openai/api_key"
+                echo_success "OpenAI API key saved"
+            else
+                echo_warning "Skipped - no key provided"
+            fi
+        else
+            echo_info "Skipping OpenAI setup"
+        fi
+        echo ""
+    else
+        read -p "OpenAI already configured. Reconfigure? (y/n): " RECONFIG_OPENAI
+        if [ "$RECONFIG_OPENAI" = "y" ]; then
+            read -p "OpenAI API Key: " OPENAI_KEY
+
+            if [ -n "$OPENAI_KEY" ]; then
+                mkdir -p "$HOME/.config/openai"
+                echo "$OPENAI_KEY" > "$HOME/.config/openai/api_key"
+                chmod 600 "$HOME/.config/openai/api_key"
+                echo_success "OpenAI API key updated"
+            fi
+        fi
+        echo ""
+    fi
+
+    # Summary
+    echo "═══════════════════════════════════════════════════════"
+    echo "                    SETUP COMPLETE"
+    echo "═══════════════════════════════════════════════════════"
+    echo ""
+
+    # Re-check status
+    if [ -f "$HOME/.aws/credentials" ] && grep -q "aws_access_key_id" "$HOME/.aws/credentials" 2>/dev/null; then
+        echo -e "  ${GREEN}✓${NC} AWS: Port management enabled"
+    else
+        echo -e "  ${YELLOW}○${NC} AWS: Run 'vibecode setup' to configure"
+    fi
+
+    if [ -f "$HOME/.config/openai/api_key" ] && [ -s "$HOME/.config/openai/api_key" ]; then
+        echo -e "  ${GREEN}✓${NC} OpenAI: /codex-review enabled"
+    else
+        echo -e "  ${YELLOW}○${NC} OpenAI: Run 'vibecode setup' to configure"
+    fi
+
+    echo ""
+    echo "Next steps:"
+    echo "  ${GREEN}vibecode dashboard 8498${NC}  - Start web dashboard"
+    echo "  ${GREEN}vibe my-project${NC}          - Start coding session"
+    echo "  ${GREEN}/codex-review${NC}            - Run AI bug detection"
+    echo ""
+}
+
+# =============================================================================
 # COMMANDS
 # =============================================================================
 
@@ -226,6 +397,7 @@ cmd_help() {
     echo "  ${GREEN}remove${NC} <project>          Delete project environment"
     echo "  ${GREEN}lightsail${NC} <subcommand>    Mobile/Lightsail setup & sessions"
     echo "  ${GREEN}dashboard${NC} [port]          Start web dashboard (default: 8080)"
+    echo "  ${GREEN}setup${NC}                     Interactive credential setup (AWS, OpenAI)"
     echo "  ${GREEN}help${NC}                      Show this help"
     echo ""
     echo "Lightsail/Mobile:"
@@ -687,6 +859,9 @@ case "$COMMAND" in
     dashboard|dash)
         shift
         cmd_dashboard "$@"
+        ;;
+    setup)
+        cmd_setup
         ;;
     help|--help|-h)
         cmd_help
