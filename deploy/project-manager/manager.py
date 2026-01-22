@@ -238,8 +238,12 @@ def create_project():
         })
 
     except subprocess.CalledProcessError as e:
+        print(f"[create_project] Git error: {e.stderr.decode()}")
         return jsonify({"error": f"Git error: {e.stderr.decode()}"}), 500
     except Exception as e:
+        import traceback
+        print(f"[create_project] Exception: {e}")
+        traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
 
@@ -278,6 +282,7 @@ def _create_container(project_id: str, port: int, project_dir: Path):
         volumes={
             str(project_dir): {"bind": "/projects", "mode": "rw"},
             "deploy_claude_credentials": {"bind": "/home/vibes/.claude", "mode": "rw"},
+            "/root/.claude": {"bind": "/root/.claude", "mode": "ro"},
         },
         network=NETWORK_NAME,
         labels={
