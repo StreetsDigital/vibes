@@ -86,8 +86,18 @@ services:
     restart: unless-stopped
     environment:
       - VIBES_USE_BEADS=true
+      # Claude
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
+      # OpenAI
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      # Google
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      # GitHub (for Copilot/CLI tools)
+      - GITHUB_TOKEN=${GITHUB_TOKEN:-}
+      # Groq
+      - GROQ_API_KEY=${GROQ_API_KEY:-}
       # Route traffic through HTTP proxy (HPTS converts to SOCKS5->WARP)
       - HTTPS_PROXY=http://hpts:8080
       - HTTP_PROXY=http://hpts:8080
@@ -138,8 +148,14 @@ services:
       - BASE_PORT=3010
       - MAX_PROJECTS=10
       - FRONTEND_IMAGE=deploy-frontend:latest
+      # Pass all API keys to spawned containers
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - GITHUB_TOKEN=${GITHUB_TOKEN:-}
+      - GROQ_API_KEY=${GROQ_API_KEY:-}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - /home/vibes/projects:/home/vibes/projects

@@ -262,8 +262,18 @@ def _create_container(project_id: str, port: int, project_dir: Path):
         restart_policy={"Name": "unless-stopped"},
         environment={
             "VIBES_USE_BEADS": "true",
+            # Claude
             "ANTHROPIC_API_KEY": os.environ.get("ANTHROPIC_API_KEY", ""),
             "CLAUDE_CODE_OAUTH_TOKEN": os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", ""),
+            # OpenAI
+            "OPENAI_API_KEY": os.environ.get("OPENAI_API_KEY", ""),
+            # Google
+            "GOOGLE_API_KEY": os.environ.get("GOOGLE_API_KEY", ""),
+            "GEMINI_API_KEY": os.environ.get("GEMINI_API_KEY", ""),
+            # GitHub
+            "GITHUB_TOKEN": os.environ.get("GITHUB_TOKEN", ""),
+            # Groq
+            "GROQ_API_KEY": os.environ.get("GROQ_API_KEY", ""),
         },
         volumes={
             str(project_dir): {"bind": "/projects", "mode": "rw"},
