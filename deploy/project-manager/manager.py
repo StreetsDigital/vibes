@@ -277,7 +277,7 @@ def _create_container(project_id: str, port: int, project_dir: Path):
         },
         volumes={
             str(project_dir): {"bind": "/projects", "mode": "rw"},
-            "deploy_claude_credentials": {"bind": "/root/.claude", "mode": "rw"},
+            "deploy_claude_credentials": {"bind": "/home/vibes/.claude", "mode": "rw"},
         },
         network=NETWORK_NAME,
         labels={
@@ -433,8 +433,8 @@ def record_activity(project_id: str):
 # Project Proxy
 # ===========================================
 
-@app.route("/project/<project_id>/", defaults={"path": ""})
-@app.route("/project/<project_id>/<path:path>")
+@app.route("/project/<project_id>/", defaults={"path": ""}, methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"])
+@app.route("/project/<project_id>/<path:path>", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"])
 def proxy_project(project_id: str, path: str):
     """Proxy requests to project containers."""
     projects = load_projects()
@@ -475,7 +475,7 @@ def proxy_project(project_id: str, path: str):
                 data=request.get_data(),
                 params=request.args,
                 allow_redirects=False,
-                timeout=30,
+                timeout=180,  # 3 minutes for Claude responses
             )
 
             # Build response

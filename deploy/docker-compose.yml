@@ -104,7 +104,7 @@ services:
       - NO_PROXY=localhost,127.0.0.1,vibes-warp,vibes-frontend,vibes-dashboard,vibes-caddy,vibes-hpts
     volumes:
       - projects:/projects
-      - claude_credentials:/root/.claude
+      - claude_credentials:/home/vibes/.claude
     networks:
       - vibes-network
     expose:

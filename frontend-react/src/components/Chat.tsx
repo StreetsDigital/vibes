@@ -395,6 +395,26 @@ export function Chat({ messages, loading, branch, onSend, onStop, onClear, onSho
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
                 </svg>
               </button>
+              {/* Autowork - Robot icon */}
+              <button
+                onClick={async () => {
+                  try {
+                    await fetch('/api/autowork', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ parallel_agents: 4 })
+                    });
+                  } catch (e) {
+                    console.error('Failed to start autowork:', e);
+                  }
+                }}
+                className="p-2 hover:bg-gray-700 rounded-lg active:bg-gray-600 text-green-400 hover:text-green-300"
+                title="Start autonomous work (4 agents)"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                </svg>
+              </button>
               {/* Send / Stop */}
               {loading ? (
                 <button
@@ -442,6 +462,23 @@ export function Chat({ messages, loading, branch, onSend, onStop, onClear, onSho
             className="w-full text-left px-4 py-3 hover:bg-gray-700 rounded-lg"
           >
             Run quality checks
+          </button>
+          <button
+            onClick={async () => {
+              setShowActionMenu(false);
+              try {
+                await fetch('/api/autowork', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ parallel_agents: 4 })
+                });
+              } catch (e) {
+                console.error('Failed to start autowork:', e);
+              }
+            }}
+            className="w-full text-left px-4 py-3 hover:bg-gray-700 rounded-lg text-green-400"
+          >
+            🤖 Start autonomous work
           </button>
           <button
             onClick={() => { quickPrompt('Show git status'); setShowActionMenu(false); }}

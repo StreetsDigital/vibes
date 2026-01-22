@@ -47,6 +47,65 @@ _current_claude_process: subprocess.Popen = None  # Track current Claude process
 AUTH_USERNAME = os.environ.get("VIBES_USERNAME", "")
 AUTH_PASSWORD = os.environ.get("VIBES_PASSWORD", "")
 
+# Autonomous mode system prompt
+AUTONOMOUS_SYSTEM_PROMPT = """You are an autonomous coding agent with a team of specialized subagents. You have MCP tools for task management and coding.
+
+## AVAILABLE MCP TOOLS:
+- `kanban_get_board` - Get current board state with all tasks
+- `kanban_move_task` - Move task: {"bead_id": "...", "column": "in_progress|done|todo"}
+- `kanban_create_task` - Create task: {"name": "...", "description": "...", "test_cases": [...]}
+- `subagent_spawn` - Spawn parallel agent for a feature: {"feature": {...}}
+- `feature_discuss` - Pre-planning discussion for complex features
+- `aleph_search` - Search codebase for relevant code
+
+## AUTONOMOUS WORKFLOW:
+1. Use `kanban_get_board` to see pending tasks
+2. Pick the HIGHEST PRIORITY task from todo column
+3. Use `kanban_move_task` to move it to "in_progress"
+4. Implement the feature - write real code, create files, run tests
+5. Use `kanban_move_task` to move it to "done" when complete
+6. Repeat from step 1 until no tasks remain
+
+## AGENT TYPES (spawn via subagent_spawn with agent_type):
+
+### CODING AGENTS:
+- `feature_agent` - Implements features, writes business logic
+- `refactor_agent` - Refactors code, improves architecture
+
+### E2E TESTING AGENTS:
+- `e2e_test_agent` - Writes end-to-end tests (Playwright, Cypress, etc.)
+- `integration_test_agent` - Writes integration tests, API tests
+- `unit_test_agent` - Writes unit tests for individual functions
+- `test_runner_agent` - Runs test suites, reports failures, suggests fixes
+
+### INFRASTRUCTURE AGENTS:
+- `docker_agent` - Creates/updates Dockerfiles, docker-compose configs
+- `ci_cd_agent` - Sets up GitHub Actions, GitLab CI, Jenkins pipelines
+- `deployment_agent` - Creates deployment scripts, K8s manifests, Terraform
+- `monitoring_agent` - Sets up logging, metrics, alerting configs
+- `security_agent` - Audits code for vulnerabilities, adds security headers
+
+### QA AGENTS:
+- `code_review_agent` - Reviews code changes, suggests improvements
+- `documentation_agent` - Writes READMEs, API docs, inline comments
+
+## MULTI-AGENT STRATEGY:
+1. Spawn `feature_agent` for each coding task
+2. Spawn `e2e_test_agent` once features are ready
+3. Spawn `docker_agent` if containerization needed
+4. Spawn `ci_cd_agent` to set up pipelines
+5. Use `test_runner_agent` to verify everything works
+
+## RULES:
+- DO NOT ask questions - make reasonable decisions and proceed
+- DO NOT wait for approval - execute autonomously
+- DO update the board as you work (move tasks through columns)
+- DO write production-quality code with tests
+- DO spawn specialized agents for their domains
+- DO use existing code patterns from the codebase
+
+START NOW. Get the board, analyze tasks, spawn appropriate agents, and execute."""
+
 
 def check_auth(username: str, password: str) -> bool:
     """Check if username/password is valid."""
@@ -234,6 +293,35 @@ def delete_task(task_id):
 
     result = _bead_store.delete(task_id)
     return jsonify(result)
+
+
+@app.route('/api/autowork', methods=['POST'])
+@requires_auth
+def start_autowork():
+    """Start autonomous work mode - Claude works through all tasks automatically."""
+    if not _project_dir:
+        return jsonify({"error": "Not initialized"}), 500
+
+    data = request.json or {}
+    parallel_agents = data.get("parallel_agents", 1)  # Number of parallel agents to spawn
+
+    # Run autonomous Claude in background
+    import threading
+
+    def run_autonomous():
+        try:
+            run_autonomous_claude(parallel_agents)
+        except Exception as e:
+            print(f"[autowork] Error: {e}")
+
+    thread = threading.Thread(target=run_autonomous, daemon=True)
+    thread.start()
+
+    return jsonify({
+        "success": True,
+        "message": f"Autonomous mode started with {parallel_agents} agent(s)",
+        "parallel_agents": parallel_agents
+    })
 
 
 # ===========================================
@@ -586,9 +674,9 @@ def chat():
     # Build context from current board state
     context = build_chat_context()
 
-    # Run Claude CLI with the message
+    # Run Claude CLI with the message and history
     try:
-        response = run_claude_prompt(message, context)
+        response = run_claude_prompt(message, context, history[:-1])  # Pass history excluding current message
 
         # Add assistant response
         history.append({
@@ -642,26 +730,56 @@ def build_chat_context() -> str:
     return "\n".join(lines)
 
 
-def run_claude_prompt(message: str, context: str) -> str:
+def run_claude_prompt(message: str, context: str, history: list = None) -> str:
     """Run a prompt through Claude CLI."""
     global _current_claude_process
 
+    # Build conversation history (last 6 messages, truncated to save tokens)
+    history_text = ""
+    if history:
+        recent = history[-6:]  # Keep last 6 messages (3 exchanges)
+        history_lines = []
+        for msg in recent:
+            role = "User" if msg["role"] == "user" else "Assistant"
+            content = msg['content']
+            # Truncate long messages to 300 chars
+            if len(content) > 300:
+                content = content[:300] + "..."
+            history_lines.append(f"{role}: {content}")
+        if history_lines:
+            history_text = "\n\n## Recent Conversation:\n" + "\n\n".join(history_lines)
+
     full_prompt = f"""You are helping with a task board. Here's the current state:
 
-{context}
+{context}{history_text}
 
 User message: {message}
 
 Respond helpfully and concisely."""
 
     try:
+        # Write prompt to temp file to avoid shell escaping issues
+        import tempfile
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
+            f.write(full_prompt)
+            prompt_file = f.name
+        os.chmod(prompt_file, 0o644)  # Make readable by vibes user
+
         # Use Popen for interruptibility
+        # Run as vibes user (non-root) so --dangerously-skip-permissions works
+        # --dangerously-skip-permissions allows autonomous operation without approval prompts
+        # --mcp-config loads MCP servers (context7, etc.) for enhanced capabilities
+        # runuser doesn't require password when running as root
+        mcp_config = "/home/vibes/.claude/settings.json"
+        cmd = f'runuser -u vibes -- bash -c \'cd "{_project_dir}" && claude --print --dangerously-skip-permissions --mcp-config {mcp_config} -p "$(cat {prompt_file})"\''
         _current_claude_process = subprocess.Popen(
-            ["claude", "--print", "-p", full_prompt],
+            cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            cwd=str(_project_dir)
+            cwd=str(_project_dir),
+            env={**os.environ, "HOME": "/home/vibes"},
+            shell=True
         )
 
         try:
@@ -679,6 +797,11 @@ Respond helpfully and concisely."""
             return "Request timed out. Claude may be processing a long response."
         finally:
             _current_claude_process = None
+            # Clean up temp file
+            try:
+                os.unlink(prompt_file)
+            except:
+                pass
 
     except FileNotFoundError:
         _current_claude_process = None
@@ -686,6 +809,130 @@ Respond helpfully and concisely."""
     except Exception as e:
         _current_claude_process = None
         return f"Error running Claude: {str(e)}"
+
+
+def run_autonomous_claude(parallel_agents: int = 1):
+    """Run Claude in autonomous mode - works through all tasks on the board."""
+    import tempfile
+    import time
+
+    print(f"[autowork] Starting autonomous mode with {parallel_agents} agent(s)")
+
+    # Add starting message to chat immediately
+    history = load_chat_history()
+    history.append({
+        "role": "user",
+        "content": f"[AUTO] Start autonomous mode with {parallel_agents} parallel agent(s)",
+        "timestamp": datetime.now().isoformat()
+    })
+    history.append({
+        "role": "assistant",
+        "content": f"🤖 **Autonomous mode activated!**\n\nI'm checking the kanban board and will work through all pending tasks.\n\n*Working with {parallel_agents} parallel agent(s)...*",
+        "timestamp": datetime.now().isoformat()
+    })
+    save_chat_history(history[-100:])
+
+    # Build the autonomous prompt
+    prompt = AUTONOMOUS_SYSTEM_PROMPT
+
+    if parallel_agents > 1:
+        prompt += f"\n\n## PARALLEL MODE: Spawn up to {parallel_agents} subagents to work on tasks concurrently."
+
+    # Write prompt to temp file
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
+        f.write(prompt)
+        prompt_file = f.name
+    os.chmod(prompt_file, 0o644)
+
+    mcp_config = "/home/vibes/.claude/settings.json"
+
+    # Run Claude with longer timeout for autonomous work (10 minutes)
+    cmd = f'runuser -u vibes -- bash -c \'cd "{_project_dir}" && claude --print --dangerously-skip-permissions --mcp-config {mcp_config} -p "$(cat {prompt_file})"\''
+
+    print(f"[autowork] Running: {cmd[:100]}...")
+
+    try:
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,  # Combine stderr with stdout
+            text=True,
+            cwd=str(_project_dir),
+            env={**os.environ, "HOME": "/home/vibes"},
+            shell=True,
+            bufsize=1  # Line buffered
+        )
+
+        # Stream output and update chat periodically
+        output_lines = []
+        last_update = time.time()
+        update_interval = 10  # Update chat every 10 seconds
+
+        for line in iter(process.stdout.readline, ''):
+            output_lines.append(line)
+            print(f"[autowork] {line.rstrip()}")
+
+            # Periodic update to chat
+            if time.time() - last_update > update_interval:
+                last_update = time.time()
+                # Add progress update to chat
+                history = load_chat_history()
+                progress_text = ''.join(output_lines[-20:])  # Last 20 lines
+                history.append({
+                    "role": "assistant",
+                    "content": f"📝 **Progress update:**\n```\n{progress_text[-1000:]}\n```",
+                    "timestamp": datetime.now().isoformat()
+                })
+                save_chat_history(history[-100:])
+
+        process.wait(timeout=600)
+        stdout = ''.join(output_lines)
+
+        if process.returncode == 0:
+            print(f"[autowork] Completed successfully")
+
+            # Save final output to chat history
+            history = load_chat_history()
+            history.append({
+                "role": "assistant",
+                "content": f"✅ **Autonomous work complete!**\n\n{stdout[-2000:] if len(stdout) > 2000 else stdout}",
+                "timestamp": datetime.now().isoformat()
+            })
+            save_chat_history(history[-100:])
+        else:
+            print(f"[autowork] Error: returncode={process.returncode}")
+            history = load_chat_history()
+            history.append({
+                "role": "assistant",
+                "content": f"❌ **Autonomous work failed**\n\nError code: {process.returncode}\n\n```\n{stdout[-1000:]}\n```",
+                "timestamp": datetime.now().isoformat()
+            })
+            save_chat_history(history[-100:])
+
+    except subprocess.TimeoutExpired:
+        process.kill()
+        print("[autowork] Timed out after 10 minutes")
+        history = load_chat_history()
+        history.append({
+            "role": "assistant",
+            "content": "⏱️ **Autonomous work timed out** after 10 minutes. Check the board for progress.",
+            "timestamp": datetime.now().isoformat()
+        })
+        save_chat_history(history[-100:])
+    except Exception as e:
+        print(f"[autowork] Exception: {e}")
+        history = load_chat_history()
+        history.append({
+            "role": "assistant",
+            "content": f"❌ **Error:** {str(e)}",
+            "timestamp": datetime.now().isoformat()
+        })
+        save_chat_history(history[-100:])
+    finally:
+        try:
+            os.unlink(prompt_file)
+        except:
+            pass
 
 
 # ===========================================

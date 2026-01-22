@@ -50,6 +50,121 @@ class SubagentConfig:
 
 
 # =============================================================================
+# AGENT TYPE PROMPTS
+# =============================================================================
+
+AGENT_TYPE_PROMPTS = {
+    # Coding agents
+    "feature_agent": """You are a FEATURE IMPLEMENTATION agent. Your job is to:
+- Implement the feature according to specifications
+- Write clean, production-quality code
+- Follow existing code patterns in the codebase
+- Create necessary files and update existing ones
+When done, output: FEATURE_COMPLETE""",
+
+    "refactor_agent": """You are a REFACTORING agent. Your job is to:
+- Improve code architecture without changing behavior
+- Apply DRY principles and reduce duplication
+- Improve naming and code organization
+- Ensure all tests still pass after refactoring
+When done, output: FEATURE_COMPLETE""",
+
+    # E2E Testing agents
+    "e2e_test_agent": """You are an E2E TESTING agent. Your job is to:
+- Write end-to-end tests using Playwright or Cypress
+- Test complete user flows from start to finish
+- Include setup/teardown for test data
+- Test happy paths and error cases
+- Output test files in tests/e2e/ or similar
+When done, output: FEATURE_COMPLETE""",
+
+    "integration_test_agent": """You are an INTEGRATION TEST agent. Your job is to:
+- Write integration tests for API endpoints
+- Test service interactions and data flow
+- Mock external dependencies appropriately
+- Test authentication and authorization flows
+- Output test files in tests/integration/
+When done, output: FEATURE_COMPLETE""",
+
+    "unit_test_agent": """You are a UNIT TEST agent. Your job is to:
+- Write unit tests for individual functions/methods
+- Achieve high code coverage for new code
+- Test edge cases and error conditions
+- Use appropriate mocking for dependencies
+- Follow testing conventions in the codebase
+When done, output: FEATURE_COMPLETE""",
+
+    "test_runner_agent": """You are a TEST RUNNER agent. Your job is to:
+- Run all test suites (unit, integration, e2e)
+- Report failures clearly with stack traces
+- Suggest fixes for failing tests
+- Verify test coverage meets requirements
+- Run linting and type checking if available
+When done, output: FEATURE_COMPLETE""",
+
+    # Infrastructure agents
+    "docker_agent": """You are a DOCKER/CONTAINER agent. Your job is to:
+- Create or update Dockerfiles
+- Optimize image size and build time
+- Set up docker-compose for local development
+- Configure multi-stage builds for production
+- Add health checks and proper signal handling
+When done, output: FEATURE_COMPLETE""",
+
+    "ci_cd_agent": """You are a CI/CD PIPELINE agent. Your job is to:
+- Set up GitHub Actions / GitLab CI / Jenkins pipelines
+- Configure build, test, and deploy stages
+- Add caching for faster builds
+- Set up environment-specific deployments
+- Add status badges and notifications
+When done, output: FEATURE_COMPLETE""",
+
+    "deployment_agent": """You are a DEPLOYMENT agent. Your job is to:
+- Create deployment scripts and configurations
+- Write Kubernetes manifests or Terraform configs
+- Set up staging and production environments
+- Configure secrets management
+- Add rollback procedures
+When done, output: FEATURE_COMPLETE""",
+
+    "monitoring_agent": """You are a MONITORING/OBSERVABILITY agent. Your job is to:
+- Set up structured logging (JSON format)
+- Add metrics collection (Prometheus/StatsD)
+- Configure alerting rules
+- Add distributed tracing if applicable
+- Create dashboards for key metrics
+When done, output: FEATURE_COMPLETE""",
+
+    "security_agent": """You are a SECURITY AUDIT agent. Your job is to:
+- Audit code for common vulnerabilities (OWASP Top 10)
+- Check for hardcoded secrets and credentials
+- Add security headers and CORS configuration
+- Review authentication/authorization logic
+- Suggest security improvements
+When done, output: FEATURE_COMPLETE""",
+
+    # QA agents
+    "code_review_agent": """You are a CODE REVIEW agent. Your job is to:
+- Review code changes for quality and correctness
+- Check for bugs, edge cases, and error handling
+- Verify code follows project conventions
+- Suggest improvements and optimizations
+- Ensure proper documentation exists
+When done, output: FEATURE_COMPLETE""",
+
+    "documentation_agent": """You are a DOCUMENTATION agent. Your job is to:
+- Write or update README files
+- Create API documentation
+- Add inline code comments where helpful
+- Document configuration options
+- Create usage examples
+When done, output: FEATURE_COMPLETE""",
+}
+
+DEFAULT_AGENT_TYPE = "feature_agent"
+
+
+# =============================================================================
 # CONTEXT BUILDER
 # =============================================================================
 
@@ -207,21 +322,27 @@ class SubagentSpawner:
         self,
         feature: Dict[str, Any],
         relevant_code: List[Dict[str, Any]] = None,
-        on_output: callable = None
+        on_output: callable = None,
+        agent_type: str = None
     ) -> Dict[str, Any]:
         """
         Spawn a fresh subagent to implement a feature.
-        
+
         Args:
             feature: Feature dict with name, description, test_cases
             relevant_code: Code snippets from Aleph search
             on_output: Callback for streaming output
-            
+            agent_type: Type of agent (e2e_test_agent, docker_agent, etc.)
+
         Returns:
             Result dict with status, output, duration
         """
         start_time = time.time()
-        
+
+        # Get agent type prompt
+        agent_type = agent_type or DEFAULT_AGENT_TYPE
+        agent_prompt = AGENT_TYPE_PROMPTS.get(agent_type, AGENT_TYPE_PROMPTS[DEFAULT_AGENT_TYPE])
+
         # Build focused context
         decisions = self.context_builder.extract_decisions()
         context = self.context_builder.build_context(
@@ -229,7 +350,10 @@ class SubagentSpawner:
             relevant_code=relevant_code,
             decisions=decisions
         )
-        
+
+        # Prepend agent type prompt to context
+        context = f"## AGENT ROLE\n{agent_prompt}\n\n{context}"
+
         # Check context size
         if len(context) > self.config.max_context_chars:
             # Truncate relevant code first
@@ -238,7 +362,8 @@ class SubagentSpawner:
                 relevant_code=relevant_code[:2] if relevant_code else None,
                 decisions=decisions[:5]
             )
-        
+            context = f"## AGENT ROLE\n{agent_prompt}\n\n{context}"
+
         # Spawn subagent
         if self.config.use_cli:
             result = self._spawn_cli_subagent(context, on_output)
@@ -722,18 +847,24 @@ def init_subagent_system(project_dir: str) -> Dict[str, Any]:
 
 def spawn_feature_subagent(
     feature: Dict[str, Any],
-    relevant_code: List[Dict[str, Any]] = None
+    relevant_code: List[Dict[str, Any]] = None,
+    agent_type: str = None
 ) -> Dict[str, Any]:
     """
     Spawn a fresh subagent to implement a feature.
-    
+
     This gives the feature a fresh 200k context window,
     preventing quality degradation from accumulated context.
+
+    Args:
+        feature: Feature dict
+        relevant_code: Code snippets from Aleph search
+        agent_type: Type of agent (e2e_test_agent, docker_agent, etc.)
     """
     if _spawner is None:
         return {"error": "Subagent system not initialized"}
-    
-    return _spawner.spawn_for_feature(feature, relevant_code)
+
+    return _spawner.spawn_for_feature(feature, relevant_code, agent_type=agent_type)
 
 
 def discuss_feature(
@@ -787,10 +918,11 @@ def research_feature(
 
 def get_subagent_tools() -> List[Dict[str, Any]]:
     """Get tool definitions for MCP registration."""
+    agent_types_desc = ", ".join(AGENT_TYPE_PROMPTS.keys())
     return [
         {
             "name": "subagent_spawn",
-            "description": "Spawn a fresh subagent with 200k context for feature implementation. Prevents quality degradation.",
+            "description": f"Spawn a specialized subagent with 200k context. Agent types: {agent_types_desc}",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -801,6 +933,11 @@ def get_subagent_tools() -> List[Dict[str, Any]]:
                     "relevant_code": {
                         "type": "array",
                         "description": "Code snippets from Aleph search"
+                    },
+                    "agent_type": {
+                        "type": "string",
+                        "description": "Type of agent to spawn",
+                        "enum": list(AGENT_TYPE_PROMPTS.keys())
                     }
                 },
                 "required": ["feature"]
@@ -866,7 +1003,8 @@ def handle_subagent_tool(name: str, arguments: Dict[str, Any]) -> Dict[str, Any]
     handlers = {
         "subagent_spawn": lambda args: spawn_feature_subagent(
             args["feature"],
-            args.get("relevant_code")
+            args.get("relevant_code"),
+            args.get("agent_type")
         ),
         "feature_discuss": lambda args: discuss_feature(
             args["feature"],

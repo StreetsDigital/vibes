@@ -1,0 +1,24 @@
+{
+  "mcpServers": {
+    "context7": {
+      "command": "npx",
+      "args": ["-y", "@upstash/context7-mcp"],
+      "description": "Up-to-date library documentation for LLMs",
+      "env": {}
+    },
+    "sequential-thinking": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-sequentialthinking"],
+      "description": "Sequential reasoning chains for complex problem solving",
+      "env": {}
+    },
+    "vibecoding": {
+      "command": "python",
+      "args": ["/app/mcp_server/vibecoding_server.py", "/projects"],
+      "description": "Feature management, quality gates, task planning",
+      "env": {
+        "PYTHONPATH": "/app/mcp_server"
+      }
+    }
+  }
+}

@@ -30,7 +30,12 @@
 
 	# Dynamic project routing - proxy through project-manager
 	handle /project/* {
-		reverse_proxy project-manager:3009
+		reverse_proxy project-manager:3009 {
+			transport http {
+				read_timeout 180s
+				write_timeout 180s
+			}
+		}
 	}
 
 	# Frontend app (default project)

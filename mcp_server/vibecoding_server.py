@@ -25,9 +25,9 @@ from typing import Any, Dict, List, Optional
 
 # MCP SDK imports
 try:
-    from mcp.server import Server
+    from mcp.server import Server, InitializationOptions
     from mcp.server.stdio import stdio_server
-    from mcp.types import Tool, TextContent
+    from mcp.types import Tool, TextContent, ServerCapabilities, ToolsCapability
     MCP_AVAILABLE = True
 except ImportError:
     MCP_AVAILABLE = False
@@ -849,9 +849,14 @@ async def run_mcp_server(project_dir: str):
 
         return [TextContent(type="text", text=json.dumps(result, indent=2))]
     
-    # Run server
+    # Run server with initialization options
+    init_options = InitializationOptions(
+        server_name="autocoder-vibecoding-quality",
+        server_version="1.0.0",
+        capabilities=ServerCapabilities(tools=ToolsCapability())
+    )
     async with stdio_server() as (read_stream, write_stream):
-        await server.run(read_stream, write_stream)
+        await server.run(read_stream, write_stream, init_options)
 
 
 # =============================================================================
