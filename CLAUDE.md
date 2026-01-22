@@ -486,3 +486,16 @@ Before marking any feature complete:
 ```
 
 Copy this into progress.md for each feature.
+
+## Server Management
+
+**IMPORTANT**: Always use `./deploy/vibes-ctl.sh` instead of `docker compose` directly to protect project containers from accidental deletion.
+
+```bash
+./deploy/vibes-ctl.sh down      # Safe shutdown - prompts before removing projects
+./deploy/vibes-ctl.sh stop      # Stop core services, preserve projects
+./deploy/vibes-ctl.sh restart   # Restart all services
+./deploy/vibes-ctl.sh status    # Show stack and project status
+```
+
+Never run `docker compose down` directly - it will orphan/delete project containers without warning.
