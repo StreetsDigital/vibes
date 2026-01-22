@@ -1,23 +1,25 @@
 #!/usr/bin/env bash
 #
-# Vibecode - Unified Vibecoding Stack Manager
-# ============================================
-# One script to rule them all
+# vibecode - The Vibecoding Stack CLI
+# ====================================
+# One command to rule them all.
 #
 # Usage:
-#   vibecode setup                   - Interactive credential setup (first time)
-#   vibecode init                    - Install claudebox + vibecoding stack
-#   vibecode new <project> [profile] - Create new isolated project
-#   vibecode shell <project>         - Enter project environment
-#   vibecode list                    - List all projects
-#   vibecode remove <project>        - Remove project
-#   vibecode status [project]        - Show project status
-#   vibecode lightsail <subcommand>  - Mobile/Lightsail setup
+#   vibecode install [--server]      - Install the full stack
+#   vibecode setup                   - Configure credentials (AWS, OpenAI)
+#   vibecode new <project> [profile] - Create isolated project
+#   vibecode shell <project>         - Enter project shell
+#   vibecode code <project>          - Start Claude Code in project
+#   vibecode list                    - List projects
+#   vibecode status [project]        - Show status
 #   vibecode dashboard [port]        - Start web dashboard
-#   vibecode help                    - Show this help
+#   vibecode lightsail <cmd>         - Lightsail/mobile helpers
+#   vibecode help                    - Show help
 #
 
 set -e
+
+VERSION="2.0.0"
 
 # Colors
 RED='\033[0;31m'
@@ -26,14 +28,16 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 MAGENTA='\033[0;35m'
+BOLD='\033[1m'
+DIM='\033[2m'
 NC='\033[0m'
 
 # Helpers
 echo_step() { echo -e "${BLUE}==>${NC} $1"; }
 echo_success() { echo -e "${GREEN}✓${NC} $1"; }
-echo_warning() { echo -e "${YELLOW}⚠${NC} $1"; }
+echo_warning() { echo -e "${YELLOW}!${NC} $1"; }
 echo_error() { echo -e "${RED}✗${NC} $1"; }
-echo_info() { echo -e "${CYAN}ℹ${NC} $1"; }
+echo_info() { echo -e "${DIM}$1${NC}"; }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CLAUDEBOX_HOME="${HOME}/claudebox"
@@ -44,227 +48,332 @@ CLAUDEBOX_HOME="${HOME}/claudebox"
 
 show_banner() {
     echo ""
-    echo -e "${MAGENTA}╔══════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${MAGENTA}║                  VIBECODE MANAGER                            ║${NC}"
-    echo -e "${MAGENTA}║                                                              ║${NC}"
-    echo -e "${MAGENTA}║  Isolated coding environments with full vibecoding stack    ║${NC}"
-    echo -e "${MAGENTA}╚══════════════════════════════════════════════════════════════╝${NC}"
+    echo -e "${MAGENTA}  ╦  ╦╦╔╗ ╔═╗╔═╗╔═╗╔╦╗╔═╗${NC}"
+    echo -e "${MAGENTA}  ╚╗╔╝║╠╩╗║╣ ║  ║ ║ ║║║╣ ${NC}"
+    echo -e "${MAGENTA}   ╚╝ ╩╚═╝╚═╝╚═╝╚═╝═╩╝╚═╝${NC}"
+    echo -e "${DIM}  Autonomous coding with quality gates${NC}"
+    echo ""
+}
+
+show_mini_banner() {
+    echo -e "${MAGENTA}vibecode${NC} ${DIM}v${VERSION}${NC}"
+}
+
+# =============================================================================
+# INSTALL COMMAND (merged from install.sh)
+# =============================================================================
+
+cmd_install() {
+    SERVER_MODE=false
+    DOMAIN=""
+
+    # Parse args
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            --server) SERVER_MODE=true; shift ;;
+            --domain) DOMAIN="$2"; shift; shift ;;
+            *) shift ;;
+        esac
+    done
+
+    show_banner
+
+    if [ "$SERVER_MODE" = true ]; then
+        echo -e "  ${CYAN}Mode:${NC} Server deployment"
+        [ -n "$DOMAIN" ] && echo -e "  ${CYAN}Domain:${NC} $DOMAIN"
+    else
+        echo -e "  ${CYAN}Mode:${NC} Local development"
+    fi
+    echo ""
+
+    # Configuration
+    VIBES_USER="vibes"
+    VIBES_HOME="/home/${VIBES_USER}"
+    PROJECTS_DIR="${VIBES_HOME}/projects"
+    AUTOCODER_DIR="${AUTOCODER_DIR:-$HOME/autocoder}"
+    PLANNING_DIR="${PLANNING_DIR:-$HOME/.claude/skills/planning-with-files}"
+
+    # =========================================================================
+    # SERVER MODE: System setup
+    # =========================================================================
+
+    if [ "$SERVER_MODE" = true ]; then
+        if [[ $EUID -ne 0 ]]; then
+            echo_error "Server install requires root. Use: sudo vibecode install --server"
+            exit 1
+        fi
+
+        echo_step "Installing system packages..."
+        apt update -qq && apt install -y -qq \
+            curl wget git htop tmux vim unzip jq \
+            ca-certificates gnupg lsb-release \
+            python3 python3-pip python3-venv build-essential \
+            > /dev/null 2>&1
+        echo_success "System packages"
+
+        # Docker
+        echo_step "Setting up Docker..."
+        if ! command -v docker &> /dev/null; then
+            install -m 0755 -d /etc/apt/keyrings
+            curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg 2>/dev/null
+            chmod a+r /etc/apt/keyrings/docker.gpg
+            echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
+            apt update -qq && apt install -y -qq docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin > /dev/null
+            systemctl enable docker && systemctl start docker
+        fi
+        echo_success "Docker"
+
+        # Node.js
+        echo_step "Setting up Node.js..."
+        if ! command -v node &> /dev/null; then
+            curl -fsSL https://deb.nodesource.com/setup_20.x | bash - > /dev/null 2>&1
+            apt install -y -qq nodejs > /dev/null
+        fi
+        echo_success "Node.js $(node --version 2>/dev/null || echo 'installed')"
+
+        # Vibes user
+        echo_step "Creating vibes user..."
+        if ! id "${VIBES_USER}" &>/dev/null; then
+            useradd -m -s /bin/bash "${VIBES_USER}"
+        fi
+        usermod -aG docker "${VIBES_USER}"
+        echo_success "User: ${VIBES_USER}"
+
+        # Directories
+        mkdir -p "${PROJECTS_DIR}" "${VIBES_HOME}/.claude/logs" "${VIBES_HOME}/.claude/skills/learned"
+        chown -R "${VIBES_USER}:${VIBES_USER}" "${VIBES_HOME}"
+
+        # Firewall
+        if command -v ufw &> /dev/null; then
+            ufw --force enable > /dev/null 2>&1
+            ufw allow ssh > /dev/null 2>&1
+            ufw allow http > /dev/null 2>&1
+            ufw allow https > /dev/null 2>&1
+        fi
+
+        AUTOCODER_DIR="${VIBES_HOME}/autocoder"
+        PLANNING_DIR="${VIBES_HOME}/.claude/skills/planning-with-files"
+    fi
+
+    # =========================================================================
+    # Common setup
+    # =========================================================================
+
+    echo_step "Checking prerequisites..."
+
+    command -v python3 &>/dev/null && echo_success "Python $(python3 --version 2>&1 | cut -d' ' -f2)" || { echo_error "Python3 required"; exit 1; }
+    command -v git &>/dev/null && echo_success "Git" || { echo_error "Git required"; exit 1; }
+
+    # Claude CLI
+    echo_step "Installing Claude Code CLI..."
+    if ! command -v claude &> /dev/null; then
+        npm install -g @anthropic-ai/claude-code > /dev/null 2>&1 || echo_warning "Install manually: npm i -g @anthropic-ai/claude-code"
+    fi
+    command -v claude &>/dev/null && echo_success "Claude CLI"
+
+    # Python deps
+    echo_step "Installing Python dependencies..."
+    PIP_INSTALL="pip3 install --user --break-system-packages --quiet"
+    $PIP_INSTALL sqlalchemy mcp psutil 2>/dev/null || true
+    $PIP_INSTALL "aleph-rlm[mcp]" 2>/dev/null || $PIP_INSTALL "git+https://github.com/Hmbown/aleph.git#egg=aleph-rlm[mcp]" 2>/dev/null || true
+    echo_success "Python dependencies"
+
+    # =========================================================================
+    # Repository setup
+    # =========================================================================
+
+    run_as_user() {
+        if [ "$SERVER_MODE" = true ]; then
+            su - "${VIBES_USER}" -c "$1"
+        else
+            eval "$1"
+        fi
+    }
+
+    echo_step "Setting up repositories..."
+
+    # Autocoder
+    if [ ! -d "$AUTOCODER_DIR" ]; then
+        run_as_user "git clone -q https://github.com/leonvanzyl/autocoder.git \"$AUTOCODER_DIR\""
+    fi
+    echo_success "Autocoder"
+
+    # Planning skill
+    SKILLS_DIR="$(dirname "$PLANNING_DIR")"
+    run_as_user "mkdir -p \"$SKILLS_DIR\""
+    if [ ! -d "$PLANNING_DIR" ]; then
+        run_as_user "git clone -q https://github.com/OthmanAdi/planning-with-files.git /tmp/pwf && cp -r /tmp/pwf/skills/planning-with-files \"$PLANNING_DIR\" && rm -rf /tmp/pwf"
+    fi
+    echo_success "Planning skill"
+
+    # =========================================================================
+    # Integration files
+    # =========================================================================
+
+    echo_step "Installing integration files..."
+    run_as_user "mkdir -p \"$AUTOCODER_DIR/mcp_server\""
+
+    if [ -d "$SCRIPT_DIR/mcp_server" ]; then
+        run_as_user "cp \"$SCRIPT_DIR/mcp_server/\"* \"$AUTOCODER_DIR/mcp_server/\" 2>/dev/null || true"
+    fi
+
+    if [ -f "$SCRIPT_DIR/CLAUDE.md" ]; then
+        run_as_user "cp \"$SCRIPT_DIR/CLAUDE.md\" \"$AUTOCODER_DIR/\""
+    fi
+    echo_success "Integration files"
+
+    # =========================================================================
+    # Claude configuration
+    # =========================================================================
+
+    echo_step "Configuring Claude..."
+
+    CLAUDE_CONFIG_DIR="$HOME/.claude"
+    [ "$SERVER_MODE" = true ] && CLAUDE_CONFIG_DIR="${VIBES_HOME}/.claude"
+
+    run_as_user "mkdir -p \"$CLAUDE_CONFIG_DIR\""
+
+    run_as_user "cat > \"$CLAUDE_CONFIG_DIR/mcp_servers.json\" << 'EOFCFG'
+{
+  \"mcpServers\": {
+    \"vibecoding-orchestrator\": {
+      \"command\": \"python3\",
+      \"args\": [\"$AUTOCODER_DIR/mcp_server/vibecoding_server.py\"],
+      \"env\": {\"PYTHONPATH\": \"$AUTOCODER_DIR/mcp_server\"}
+    },
+    \"atom-of-thoughts\": {
+      \"command\": \"npx\",
+      \"args\": [\"-y\", \"@kbsooo/mcp-atom-of-thoughts\"]
+    },
+    \"sequential-thinking\": {
+      \"command\": \"npx\",
+      \"args\": [\"-y\", \"@modelcontextprotocol/server-sequentialthinking\"]
+    },
+    \"context7\": {
+      \"command\": \"npx\",
+      \"args\": [\"-y\", \"@upstash/context7-mcp@latest\"]
+    }
+  },
+  \"thinking\": {
+    \"enabled\": true,
+    \"preTaskAnalysis\": true
+  }
+}
+EOFCFG"
+    echo_success "MCP servers configured"
+
+    # =========================================================================
+    # Server-specific setup
+    # =========================================================================
+
+    if [ "$SERVER_MODE" = true ]; then
+        # Environment file
+        if [ -f "${SCRIPT_DIR}/deploy/env.example" ] && [ ! -f "${SCRIPT_DIR}/deploy/.env" ]; then
+            cp "${SCRIPT_DIR}/deploy/env.example" "${SCRIPT_DIR}/deploy/.env"
+            SECRET_KEY=$(openssl rand -hex 32 2>/dev/null || echo "change-me")
+            sed -i "s/SECRET_KEY=.*/SECRET_KEY=${SECRET_KEY}/" "${SCRIPT_DIR}/deploy/.env"
+            sed -i "s|PROJECTS_DIR=.*|PROJECTS_DIR=${PROJECTS_DIR}|" "${SCRIPT_DIR}/deploy/.env"
+            [ -n "$DOMAIN" ] && sed -i "s/DOMAIN=.*/DOMAIN=${DOMAIN}/" "${SCRIPT_DIR}/deploy/.env"
+            chown "${VIBES_USER}:${VIBES_USER}" "${SCRIPT_DIR}/deploy/.env"
+            chmod 600 "${SCRIPT_DIR}/deploy/.env"
+        fi
+
+        # tmux config
+        cat > "${VIBES_HOME}/.tmux.conf" << 'EOF'
+set -g mouse on
+set -g history-limit 50000
+set -g base-index 1
+set -g status-bg black
+set -g status-fg white
+bind | split-window -h
+bind - split-window -v
+EOF
+        chown "${VIBES_USER}:${VIBES_USER}" "${VIBES_HOME}/.tmux.conf"
+    fi
+
+    # =========================================================================
+    # Done!
+    # =========================================================================
+
+    echo ""
+    echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${GREEN}  Installation complete!${NC}"
+    echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+
+    if [ "$SERVER_MODE" = true ]; then
+        echo -e "  ${BOLD}What's installed:${NC}"
+        echo "    Autocoder      ${DIM}${AUTOCODER_DIR}${NC}"
+        echo "    MCP Server     ${DIM}Feature queue, Aleph, Quality gates${NC}"
+        echo "    Planning       ${DIM}${PLANNING_DIR}${NC}"
+        echo ""
+        echo -e "  ${BOLD}Next steps:${NC}"
+        echo ""
+        echo "    ${CYAN}1.${NC} Configure credentials:"
+        echo -e "       ${GREEN}vibecode setup${NC}"
+        echo ""
+        echo "    ${CYAN}2.${NC} Start the stack:"
+        echo -e "       ${GREEN}cd ${SCRIPT_DIR}/deploy && docker compose up -d${NC}"
+        echo ""
+        echo "    ${CYAN}3.${NC} Start coding:"
+        echo -e "       ${GREEN}su - vibes${NC}"
+        echo -e "       ${GREEN}cd ~/autocoder && claude${NC}"
+        echo ""
+        if [ -n "$DOMAIN" ]; then
+            echo -e "  ${BOLD}Access:${NC}"
+            echo "    Dashboard  ${CYAN}https://$DOMAIN${NC}"
+        fi
+    else
+        echo -e "  ${BOLD}What's installed:${NC}"
+        echo "    Autocoder      ${DIM}${AUTOCODER_DIR}${NC}"
+        echo "    MCP Server     ${DIM}Feature queue, Aleph, Quality gates${NC}"
+        echo "    Planning       ${DIM}${PLANNING_DIR}${NC}"
+        echo ""
+        echo -e "  ${BOLD}Start coding:${NC}"
+        echo ""
+        echo -e "    ${GREEN}cd $AUTOCODER_DIR && claude${NC}"
+        echo ""
+    fi
+
+    echo -e "  ${BOLD}Available tools:${NC}"
+    echo "    feature_get_next      ${DIM}Get next task from queue${NC}"
+    echo "    aleph_search          ${DIM}Search codebase with context${NC}"
+    echo "    quality_check         ${DIM}Run lint/types/tests${NC}"
+    echo "    feature_mark_passing  ${DIM}Complete a feature${NC}"
+    echo ""
+    echo "  ${DIM}See CLAUDE.md for the full workflow.${NC}"
     echo ""
 }
 
 # =============================================================================
-# LIGHTSAIL / MOBILE COMMANDS
-# =============================================================================
-
-cmd_lightsail() {
-    SUBCMD="${1:-help}"
-
-    case "$SUBCMD" in
-        setup)
-            echo_step "Running Lightsail mobile setup..."
-            if [ -f "$SCRIPT_DIR/lightsail/setup.sh" ]; then
-                bash "$SCRIPT_DIR/lightsail/setup.sh"
-            else
-                echo_error "Lightsail setup script not found"
-                echo_info "Expected at: $SCRIPT_DIR/lightsail/setup.sh"
-                exit 1
-            fi
-            ;;
-        session|s)
-            # Quick session starter (wrapper for vibe command)
-            PROJECT="${2:-default}"
-            SESSION="vibe-$PROJECT"
-
-            if tmux has-session -t "$SESSION" 2>/dev/null; then
-                echo_info "Attaching to: $SESSION"
-                tmux attach -t "$SESSION"
-            else
-                echo_step "Creating session: $SESSION"
-                mkdir -p "$HOME/projects/$PROJECT"
-                tmux new-session -d -s "$SESSION" -n "claude" -c "$HOME/projects/$PROJECT"
-                tmux new-window -t "$SESSION" -n "shell" -c "$HOME/projects/$PROJECT"
-                tmux select-window -t "$SESSION:1"
-                tmux attach -t "$SESSION"
-            fi
-            ;;
-        list|ls)
-            echo "Active tmux sessions:"
-            echo ""
-            tmux list-sessions 2>/dev/null || echo_warning "No active sessions"
-            ;;
-        kill)
-            if [ -z "$2" ]; then
-                echo_error "Usage: vibecode lightsail kill <session>"
-                tmux list-sessions 2>/dev/null
-                exit 1
-            fi
-            tmux kill-session -t "$2" && echo_success "Killed: $2"
-            ;;
-        open-port|port)
-            PORT="${2:-}"
-            if [ -z "$PORT" ]; then
-                echo_error "Usage: vibecode lightsail open-port <port>"
-                exit 1
-            fi
-
-            # Check if AWS CLI is configured
-            if ! command -v aws &>/dev/null; then
-                echo_error "AWS CLI not installed"
-                echo_info "Run: vibecode lightsail aws-setup"
-                exit 1
-            fi
-
-            if ! aws sts get-caller-identity &>/dev/null; then
-                echo_error "AWS CLI not configured"
-                echo_info "Run: aws configure"
-                exit 1
-            fi
-
-            # Get instance name
-            INSTANCE_NAME="${LIGHTSAIL_INSTANCE:-}"
-            if [ -z "$INSTANCE_NAME" ]; then
-                echo_step "Detecting Lightsail instance..."
-                INSTANCE_NAME=$(aws lightsail get-instances --query 'instances[0].name' --output text 2>/dev/null)
-                if [ -z "$INSTANCE_NAME" ] || [ "$INSTANCE_NAME" = "None" ]; then
-                    echo_error "Could not detect instance. Set LIGHTSAIL_INSTANCE env var"
-                    exit 1
-                fi
-                echo_info "Found instance: $INSTANCE_NAME"
-            fi
-
-            echo_step "Opening port $PORT on $INSTANCE_NAME..."
-            if aws lightsail open-instance-public-ports \
-                --instance-name "$INSTANCE_NAME" \
-                --port-info "fromPort=$PORT,toPort=$PORT,protocol=tcp" 2>/dev/null; then
-                echo_success "Port $PORT opened"
-            else
-                echo_error "Failed to open port $PORT"
-                exit 1
-            fi
-            ;;
-        aws-setup)
-            echo_step "Setting up AWS CLI for Lightsail..."
-            echo ""
-
-            # Check if AWS CLI is installed
-            if ! command -v aws &>/dev/null; then
-                echo_step "Installing AWS CLI..."
-                curl -s "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "/tmp/awscliv2.zip"
-                unzip -q /tmp/awscliv2.zip -d /tmp
-                sudo /tmp/aws/install || /tmp/aws/install --bin-dir ~/.local/bin --install-dir ~/.local/aws-cli
-                rm -rf /tmp/aws /tmp/awscliv2.zip
-                echo_success "AWS CLI installed"
-            else
-                echo_success "AWS CLI already installed"
-            fi
-
-            echo ""
-            echo "Now configure your AWS credentials:"
-            echo ""
-            echo "  1. Go to AWS IAM Console"
-            echo "  2. Create/use a user with AmazonLightsailFullAccess policy"
-            echo "  3. Generate Access Key"
-            echo "  4. Run: aws configure"
-            echo ""
-            echo "Optional: Set default instance name:"
-            echo "  export LIGHTSAIL_INSTANCE=your-instance-name"
-            echo ""
-            ;;
-        ports)
-            # List open ports on instance
-            if ! aws sts get-caller-identity &>/dev/null; then
-                echo_error "AWS CLI not configured. Run: aws configure"
-                exit 1
-            fi
-
-            INSTANCE_NAME="${LIGHTSAIL_INSTANCE:-}"
-            if [ -z "$INSTANCE_NAME" ]; then
-                INSTANCE_NAME=$(aws lightsail get-instances --query 'instances[0].name' --output text 2>/dev/null)
-            fi
-
-            echo "Open ports on $INSTANCE_NAME:"
-            echo ""
-            aws lightsail get-instance-port-states \
-                --instance-name "$INSTANCE_NAME" \
-                --query 'portStates[*].[fromPort,toPort,protocol,state]' \
-                --output table 2>/dev/null || echo_error "Failed to list ports"
-            ;;
-        help|*)
-            echo "Lightsail / Mobile Commands"
-            echo ""
-            echo "  ${GREEN}vibecode lightsail setup${NC}        Install mobile environment"
-            echo "  ${GREEN}vibecode lightsail session${NC} [p]  Start/attach coding session"
-            echo "  ${GREEN}vibecode lightsail list${NC}         List active sessions"
-            echo "  ${GREEN}vibecode lightsail kill${NC} <name>  Kill a session"
-            echo ""
-            echo "  ${GREEN}vibecode lightsail aws-setup${NC}    Install/configure AWS CLI"
-            echo "  ${GREEN}vibecode lightsail open-port${NC} N  Open port N on firewall"
-            echo "  ${GREEN}vibecode lightsail ports${NC}        List open ports"
-            echo ""
-            echo "After setup, you can also use:"
-            echo "  ${CYAN}vibe <project>${NC}    Quick session start"
-            echo "  ${CYAN}vibe-list${NC}         List sessions"
-            echo ""
-            ;;
-    esac
-}
-
-# =============================================================================
-# INTERACTIVE SETUP
+# SETUP COMMAND (credentials)
 # =============================================================================
 
 cmd_setup() {
     show_banner
-    echo "Interactive Setup - Configure all credentials"
-    echo ""
-    echo "This will set up:"
-    echo "  1. AWS credentials (for Lightsail port management)"
-    echo "  2. OpenAI API key (for /codex-review)"
+    echo "  Configure your credentials"
     echo ""
 
-    # Check what's already configured
-    AWS_CONFIGURED=false
-    OPENAI_CONFIGURED=false
+    # Check current status
+    AWS_OK=false
+    OPENAI_OK=false
+    [ -f "$HOME/.aws/credentials" ] && grep -q "aws_access_key_id" "$HOME/.aws/credentials" 2>/dev/null && AWS_OK=true
+    [ -f "$HOME/.config/openai/api_key" ] && [ -s "$HOME/.config/openai/api_key" ] && OPENAI_OK=true
 
-    if [ -f "$HOME/.aws/credentials" ] && grep -q "aws_access_key_id" "$HOME/.aws/credentials" 2>/dev/null; then
-        AWS_CONFIGURED=true
-    fi
-
-    if [ -f "$HOME/.config/openai/api_key" ] && [ -s "$HOME/.config/openai/api_key" ]; then
-        OPENAI_CONFIGURED=true
-    fi
-
-    # Status
-    echo "Current status:"
-    if $AWS_CONFIGURED; then
-        echo -e "  ${GREEN}✓${NC} AWS credentials configured"
-    else
-        echo -e "  ${YELLOW}○${NC} AWS credentials not configured"
-    fi
-
-    if $OPENAI_CONFIGURED; then
-        echo -e "  ${GREEN}✓${NC} OpenAI API key configured"
-    else
-        echo -e "  ${YELLOW}○${NC} OpenAI API key not configured"
-    fi
+    echo "  Current status:"
+    $AWS_OK && echo -e "    ${GREEN}✓${NC} AWS credentials" || echo -e "    ${DIM}○${NC} AWS credentials"
+    $OPENAI_OK && echo -e "    ${GREEN}✓${NC} OpenAI API key" || echo -e "    ${DIM}○${NC} OpenAI API key"
     echo ""
 
-    # AWS Setup
-    if ! $AWS_CONFIGURED; then
-        echo "─────────────────────────────────────────────────────"
-        echo "AWS Credentials (for Lightsail port management)"
-        echo "─────────────────────────────────────────────────────"
+    # AWS
+    if ! $AWS_OK; then
+        echo -e "  ${BOLD}AWS Credentials${NC} ${DIM}(for Lightsail port management)${NC}"
         echo ""
-        echo "You need an IAM user with Lightsail permissions."
-        echo "Create one at: https://console.aws.amazon.com/iam"
-        echo ""
-        read -p "Do you have AWS Access Key ID and Secret? (y/n): " HAS_AWS
-
-        if [ "$HAS_AWS" = "y" ] || [ "$HAS_AWS" = "Y" ]; then
-            read -p "AWS Access Key ID: " AWS_KEY_ID
-            read -p "AWS Secret Access Key: " AWS_SECRET
-            read -p "AWS Region (e.g., eu-west-1): " AWS_REGION
-
+        read -p "  Have AWS credentials? (y/n): " HAS_AWS
+        if [[ "$HAS_AWS" =~ ^[Yy] ]]; then
+            read -p "  Access Key ID: " AWS_KEY_ID
+            read -p "  Secret Access Key: " AWS_SECRET
+            read -p "  Region (e.g., eu-west-1): " AWS_REGION
             if [ -n "$AWS_KEY_ID" ] && [ -n "$AWS_SECRET" ]; then
                 mkdir -p "$HOME/.aws"
                 cat > "$HOME/.aws/credentials" << EOF
@@ -279,544 +388,297 @@ output = json
 EOF
                 chmod 600 "$HOME/.aws/credentials"
                 echo_success "AWS credentials saved"
-            else
-                echo_warning "Skipped - no credentials provided"
-            fi
-        else
-            echo_info "Skipping AWS setup"
-        fi
-        echo ""
-    else
-        read -p "AWS already configured. Reconfigure? (y/n): " RECONFIG_AWS
-        if [ "$RECONFIG_AWS" = "y" ]; then
-            read -p "AWS Access Key ID: " AWS_KEY_ID
-            read -p "AWS Secret Access Key: " AWS_SECRET
-            read -p "AWS Region (e.g., eu-west-1): " AWS_REGION
-
-            if [ -n "$AWS_KEY_ID" ] && [ -n "$AWS_SECRET" ]; then
-                mkdir -p "$HOME/.aws"
-                cat > "$HOME/.aws/credentials" << EOF
-[default]
-aws_access_key_id = $AWS_KEY_ID
-aws_secret_access_key = $AWS_SECRET
-EOF
-                cat > "$HOME/.aws/config" << EOF
-[default]
-region = ${AWS_REGION:-us-east-1}
-output = json
-EOF
-                chmod 600 "$HOME/.aws/credentials"
-                echo_success "AWS credentials updated"
             fi
         fi
         echo ""
     fi
 
-    # OpenAI Setup
-    if ! $OPENAI_CONFIGURED; then
-        echo "─────────────────────────────────────────────────────"
-        echo "OpenAI API Key (for /codex-review bug detection)"
-        echo "─────────────────────────────────────────────────────"
+    # OpenAI
+    if ! $OPENAI_OK; then
+        echo -e "  ${BOLD}OpenAI API Key${NC} ${DIM}(for /codex-review bug detection)${NC}"
         echo ""
-        echo "Get your API key at: https://platform.openai.com/api-keys"
-        echo ""
-        read -p "Do you have an OpenAI API key? (y/n): " HAS_OPENAI
-
-        if [ "$HAS_OPENAI" = "y" ] || [ "$HAS_OPENAI" = "Y" ]; then
-            read -p "OpenAI API Key: " OPENAI_KEY
-
+        read -p "  Have OpenAI API key? (y/n): " HAS_OPENAI
+        if [[ "$HAS_OPENAI" =~ ^[Yy] ]]; then
+            read -p "  API Key: " OPENAI_KEY
             if [ -n "$OPENAI_KEY" ]; then
                 mkdir -p "$HOME/.config/openai"
                 echo "$OPENAI_KEY" > "$HOME/.config/openai/api_key"
                 chmod 600 "$HOME/.config/openai/api_key"
                 echo_success "OpenAI API key saved"
-            else
-                echo_warning "Skipped - no key provided"
-            fi
-        else
-            echo_info "Skipping OpenAI setup"
-        fi
-        echo ""
-    else
-        read -p "OpenAI already configured. Reconfigure? (y/n): " RECONFIG_OPENAI
-        if [ "$RECONFIG_OPENAI" = "y" ]; then
-            read -p "OpenAI API Key: " OPENAI_KEY
-
-            if [ -n "$OPENAI_KEY" ]; then
-                mkdir -p "$HOME/.config/openai"
-                echo "$OPENAI_KEY" > "$HOME/.config/openai/api_key"
-                chmod 600 "$HOME/.config/openai/api_key"
-                echo_success "OpenAI API key updated"
             fi
         fi
         echo ""
     fi
 
-    # Summary
-    echo "═══════════════════════════════════════════════════════"
-    echo "                    SETUP COMPLETE"
-    echo "═══════════════════════════════════════════════════════"
+    echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo ""
-
-    # Re-check status
-    if [ -f "$HOME/.aws/credentials" ] && grep -q "aws_access_key_id" "$HOME/.aws/credentials" 2>/dev/null; then
-        echo -e "  ${GREEN}✓${NC} AWS: Port management enabled"
-    else
-        echo -e "  ${YELLOW}○${NC} AWS: Run 'vibecode setup' to configure"
-    fi
-
-    if [ -f "$HOME/.config/openai/api_key" ] && [ -s "$HOME/.config/openai/api_key" ]; then
-        echo -e "  ${GREEN}✓${NC} OpenAI: /codex-review enabled"
-    else
-        echo -e "  ${YELLOW}○${NC} OpenAI: Run 'vibecode setup' to configure"
-    fi
-
-    echo ""
-    echo "Next steps:"
-    echo "  ${GREEN}vibecode dashboard 8498${NC}  - Start web dashboard"
-    echo "  ${GREEN}vibe my-project${NC}          - Start coding session"
-    echo "  ${GREEN}/codex-review${NC}            - Run AI bug detection"
+    echo "  Ready to go:"
+    echo -e "    ${GREEN}vibecode dashboard 8080${NC}  ${DIM}Start web dashboard${NC}"
+    echo -e "    ${GREEN}cd ~/autocoder && claude${NC}  ${DIM}Start coding${NC}"
     echo ""
 }
 
 # =============================================================================
-# COMMANDS
+# LIGHTSAIL COMMANDS
 # =============================================================================
 
-cmd_help() {
-    show_banner
-    echo "Usage: vibecode <command> [options]"
-    echo ""
-    echo "Commands:"
-    echo "  ${GREEN}init${NC}                      Install ClaudeBox + dependencies"
-    echo "  ${GREEN}new${NC} <project> [profile]   Create isolated project environment"
-    echo "  ${GREEN}shell${NC} <project>           Enter project shell"
-    echo "  ${GREEN}code${NC} <project>            Start Claude Code in project"
-    echo "  ${GREEN}list${NC}                      List all projects"
-    echo "  ${GREEN}status${NC} [project]          Show project status"
-    echo "  ${GREEN}remove${NC} <project>          Delete project environment"
-    echo "  ${GREEN}lightsail${NC} <subcommand>    Mobile/Lightsail setup & sessions"
-    echo "  ${GREEN}dashboard${NC} [port]          Start web dashboard (default: 8080)"
-    echo "  ${GREEN}setup${NC}                     Interactive credential setup (AWS, OpenAI)"
-    echo "  ${GREEN}help${NC}                      Show this help"
-    echo ""
-    echo "Lightsail/Mobile:"
-    echo "  vibecode lightsail setup       Install mobile environment (tmux, etc)"
-    echo "  vibecode lightsail session [p] Start/attach to coding session"
-    echo "  vibecode lightsail list        List active tmux sessions"
-    echo ""
-    echo "Examples:"
-    echo "  vibecode init"
-    echo "  vibecode new my-api python"
-    echo "  vibecode new my-frontend javascript"
-    echo "  vibecode shell my-api"
-    echo "  vibecode code my-api"
-    echo "  vibecode list"
-    echo "  vibecode status my-api"
-    echo "  vibecode remove my-api"
-    echo "  vibecode lightsail setup"
-    echo "  vibecode dashboard 8080"
-    echo ""
-    echo "Profiles: python, javascript, go, rust, java, php, ruby, c, cpp"
-    echo ""
-}
+cmd_lightsail() {
+    SUBCMD="${1:-help}"
 
-cmd_init() {
-    show_banner
-    echo_step "Initializing Vibecoding Stack..."
-    echo ""
-
-    # Check if claudebox is installed
-    if command -v claudebox &> /dev/null; then
-        echo_success "ClaudeBox already installed"
-    else
-        echo_step "Installing ClaudeBox..."
-
-        # Download installer
-        INSTALLER="/tmp/claudebox.run"
-        if [ ! -f "$INSTALLER" ]; then
-            URL="https://github.com/RchGrav/claudebox/releases/latest/download/claudebox.run"
-
-            if command -v curl &> /dev/null; then
-                echo_info "Downloading ClaudeBox installer with curl..."
-                curl -fsSL "$URL" -o "$INSTALLER"
-            elif command -v wget &> /dev/null; then
-                echo_info "Downloading ClaudeBox installer with wget..."
-                wget -q --show-progress "$URL" -O "$INSTALLER"
+    case "$SUBCMD" in
+        session|s)
+            PROJECT="${2:-default}"
+            SESSION="vibe-$PROJECT"
+            if tmux has-session -t "$SESSION" 2>/dev/null; then
+                tmux attach -t "$SESSION"
             else
-                echo_error "Neither curl nor wget found. Please install one of them."
-                echo_info "Install with: brew install curl"
+                mkdir -p "$HOME/projects/$PROJECT"
+                tmux new-session -d -s "$SESSION" -n "claude" -c "$HOME/projects/$PROJECT"
+                tmux new-window -t "$SESSION" -n "shell" -c "$HOME/projects/$PROJECT"
+                tmux select-window -t "$SESSION:1"
+                tmux attach -t "$SESSION"
+            fi
+            ;;
+        list|ls)
+            echo "Active sessions:"
+            tmux list-sessions 2>/dev/null || echo "  (none)"
+            ;;
+        kill)
+            [ -z "$2" ] && { echo_error "Usage: vibecode lightsail kill <session>"; exit 1; }
+            tmux kill-session -t "$2" && echo_success "Killed: $2"
+            ;;
+        open-port|port)
+            PORT="${2:-}"
+            [ -z "$PORT" ] && { echo_error "Usage: vibecode lightsail open-port <port>"; exit 1; }
+
+            if ! aws sts get-caller-identity &>/dev/null; then
+                echo_error "AWS not configured. Run: vibecode setup"
                 exit 1
             fi
-        fi
 
-        chmod +x "$INSTALLER"
-        "$INSTALLER"
+            INSTANCE_NAME="${LIGHTSAIL_INSTANCE:-$(aws lightsail get-instances --query 'instances[0].name' --output text 2>/dev/null)}"
+            [ -z "$INSTANCE_NAME" ] || [ "$INSTANCE_NAME" = "None" ] && { echo_error "No instance found"; exit 1; }
 
-        echo_success "ClaudeBox installed"
+            echo_step "Opening port $PORT on $INSTANCE_NAME..."
+            aws lightsail open-instance-public-ports \
+                --instance-name "$INSTANCE_NAME" \
+                --port-info "fromPort=$PORT,toPort=$PORT,protocol=tcp" && echo_success "Port $PORT opened"
+            ;;
+        ports)
+            INSTANCE_NAME="${LIGHTSAIL_INSTANCE:-$(aws lightsail get-instances --query 'instances[0].name' --output text 2>/dev/null)}"
+            aws lightsail get-instance-port-states --instance-name "$INSTANCE_NAME" --query 'portStates[*].[fromPort,protocol,state]' --output table
+            ;;
+        help|*)
+            echo "Lightsail commands:"
+            echo -e "  ${GREEN}vibecode lightsail session${NC} [name]  Start/attach tmux session"
+            echo -e "  ${GREEN}vibecode lightsail list${NC}           List sessions"
+            echo -e "  ${GREEN}vibecode lightsail kill${NC} <name>    Kill session"
+            echo -e "  ${GREEN}vibecode lightsail open-port${NC} N    Open firewall port"
+            echo -e "  ${GREEN}vibecode lightsail ports${NC}          List open ports"
+            ;;
+    esac
+}
+
+# =============================================================================
+# PROJECT COMMANDS
+# =============================================================================
+
+cmd_init() {
+    show_mini_banner
+    echo_step "Initializing Vibecoding Stack..."
+
+    # Check claudebox
+    if ! command -v claudebox &> /dev/null; then
+        echo_step "Installing ClaudeBox..."
+        INSTALLER="/tmp/claudebox.run"
+        curl -fsSL "https://github.com/RchGrav/claudebox/releases/latest/download/claudebox.run" -o "$INSTALLER"
+        chmod +x "$INSTALLER" && "$INSTALLER"
     fi
+    echo_success "ClaudeBox ready"
 
-    # Check Python
-    echo_step "Checking Python..."
-    if command -v python3 &> /dev/null; then
-        PYTHON_VERSION=$(python3 --version)
-        echo_success "Python found: $PYTHON_VERSION"
-    else
-        echo_error "Python3 not found. Please install Python 3.10+"
-        exit 1
-    fi
+    # Python deps
+    pip3 install --user --quiet --break-system-packages sqlalchemy mcp 2>/dev/null || true
+    echo_success "Dependencies ready"
 
-    # Install Python dependencies
-    echo_step "Installing Python dependencies..."
-    pip3 install --user --quiet --break-system-packages \
-        sqlalchemy \
-        mcp \
-        "aleph-rlm[mcp]" 2>/dev/null || \
-        pip3 install --user --quiet --break-system-packages \
-            "git+https://github.com/Hmbown/aleph.git#egg=aleph-rlm[mcp]"
-    echo_success "Dependencies installed"
-
-    # Make vibecode globally accessible
-    echo_step "Setting up global command..."
-    INSTALL_PATH="/usr/local/bin/vibecode"
+    # Link vibecode globally
     if [ -w "/usr/local/bin" ]; then
-        ln -sf "$SCRIPT_DIR/vibecode" "$INSTALL_PATH"
-        echo_success "vibecode command installed to $INSTALL_PATH"
-    else
-        echo_warning "Cannot write to /usr/local/bin"
-        echo_info "Run: sudo ln -s $SCRIPT_DIR/vibecode /usr/local/bin/vibecode"
+        ln -sf "$SCRIPT_DIR/vibecode" "/usr/local/bin/vibecode"
+        echo_success "vibecode linked to /usr/local/bin"
     fi
 
     echo ""
-    echo_success "Initialization complete!"
-    echo ""
-    echo "Next steps:"
-    echo "  vibecode new <project-name> [profile]"
-    echo ""
+    echo -e "Next: ${GREEN}vibecode new <project-name>${NC}"
 }
 
 cmd_new() {
-    if [ -z "$1" ]; then
-        echo_error "Usage: vibecode new <project-name> [profile]"
-        exit 1
-    fi
+    [ -z "$1" ] && { echo_error "Usage: vibecode new <project> [profile]"; exit 1; }
 
     PROJECT_NAME="$1"
     PROFILE="${2:-python}"
 
-    show_banner
-    echo "  Project: ${GREEN}$PROJECT_NAME${NC}"
-    echo "  Profile: ${BLUE}$PROFILE${NC}"
+    show_mini_banner
+    echo -e "Creating ${GREEN}$PROJECT_NAME${NC} (${BLUE}$PROFILE${NC})"
     echo ""
 
-    # Check if claudebox is installed
-    if ! command -v claudebox &> /dev/null; then
-        echo_error "ClaudeBox not installed!"
-        echo_info "Run: vibecode init"
-        exit 1
-    fi
+    command -v claudebox &>/dev/null || { echo_error "Run: vibecode init"; exit 1; }
 
-    # Ensure global skills directory exists on host
-    GLOBAL_SKILLS_DIR="$HOME/.claude/skills/learned"
-    mkdir -p "$GLOBAL_SKILLS_DIR"
+    mkdir -p "$HOME/.claude/skills/learned"
 
-    # Create claudebox container
-    echo_step "Creating isolated container..."
+    echo_step "Creating container..."
     claudebox new "$PROJECT_NAME" --profile "$PROFILE"
-    echo_success "Container created"
 
-    # Mount global skills into container
-    CONTAINER_PATH="$CLAUDEBOX_HOME/$PROJECT_NAME"
-    if [ -d "$CONTAINER_PATH" ]; then
-        ln -sf "$GLOBAL_SKILLS_DIR" "$CONTAINER_PATH/host-skills" 2>/dev/null || true
-        echo_success "Global skills mounted"
-    fi
-
-    # Setup vibecoding stack inside
-    CONTAINER_PATH="$CLAUDEBOX_HOME/$PROJECT_NAME"
-
-    echo_step "Installing Vibecoding Stack..."
-
-    # Create installation script
-    cat > "$CONTAINER_PATH/.install-vibecoding.sh" << 'EOF'
+    echo_step "Installing stack..."
+    cat > "$CLAUDEBOX_HOME/$PROJECT_NAME/.install-vibecoding.sh" << 'EOF'
 #!/bin/bash
 set -e
 cd /workspace
-
-# Clone autocoder
-if [ ! -d "autocoder" ]; then
-    git clone -q https://github.com/leonvanzyl/autocoder.git autocoder
-fi
-
-# Install planning skill
+[ ! -d "autocoder" ] && git clone -q https://github.com/leonvanzyl/autocoder.git autocoder
 mkdir -p ~/.claude/skills
-if [ ! -d ~/.claude/skills/planning-with-files ]; then
-    git clone -q https://github.com/OthmanAdi/planning-with-files.git /tmp/planning
-    cp -r /tmp/planning/planning-with-files ~/.claude/skills/
-    rm -rf /tmp/planning
-fi
-
-# Setup global skills symlink (shared across all containers)
-mkdir -p ~/.claude/skills/learned
-if [ -d /host-skills ] && [ ! -L ~/.claude/skills/learned ]; then
-    # Remove local learned dir and symlink to host
-    rm -rf ~/.claude/skills/learned
-    ln -s /host-skills ~/.claude/skills/learned
-    echo "✓ Global skills linked"
-fi
-
-# Setup MCP server
-mkdir -p autocoder/mcp_server
-
-# Create vibecoding MCP server
-cat > autocoder/mcp_server/vibecoding_server.py << 'EOFMCP'
-#!/usr/bin/env python3
-"""Vibecoding Stack MCP Server - Integrated"""
-import sys
-import json
-
-def main():
-    print(json.dumps({
-        "tools": [
-            {"name": "feature_get_next", "description": "Get next feature"},
-            {"name": "feature_mark_passing", "description": "Mark feature complete"},
-            {"name": "aleph_search", "description": "Search codebase"},
-            {"name": "quality_check", "description": "Run quality gates"}
-        ]
-    }), file=sys.stderr)
-
-if __name__ == "__main__":
-    main()
-EOFMCP
-
-chmod +x autocoder/mcp_server/vibecoding_server.py
-
-# Configure Claude Desktop
-mkdir -p ~/.config/claude-desktop
-cat > ~/.config/claude-desktop/claude_desktop_config.json << 'EOFCONFIG'
-{
-  "mcpServers": {
-    "vibecoding": {
-      "command": "python3",
-      "args": ["/workspace/autocoder/mcp_server/vibecoding_server.py"]
-    }
-  }
+[ ! -d ~/.claude/skills/planning-with-files ] && {
+    git clone -q https://github.com/OthmanAdi/planning-with-files.git /tmp/p
+    cp -r /tmp/p/planning-with-files ~/.claude/skills/
+    rm -rf /tmp/p
 }
-EOFCONFIG
-
-# Setup project .claude config
-mkdir -p /workspace/.claude/commands
-
-echo "✓ Vibecoding Stack installed"
+echo "Done"
 EOF
-
-    chmod +x "$CONTAINER_PATH/.install-vibecoding.sh"
-
-    # Run installation
+    chmod +x "$CLAUDEBOX_HOME/$PROJECT_NAME/.install-vibecoding.sh"
     claudebox exec "$PROJECT_NAME" /workspace/.install-vibecoding.sh
 
-    # Copy settings
-    if [ -f "$SCRIPT_DIR/.claude/settings.json" ]; then
-        mkdir -p "$CONTAINER_PATH/workspace/.claude"
-        cp "$SCRIPT_DIR/.claude/settings.json" "$CONTAINER_PATH/workspace/.claude/"
-    fi
+    [ -f "$SCRIPT_DIR/.claude/settings.json" ] && {
+        mkdir -p "$CLAUDEBOX_HOME/$PROJECT_NAME/workspace/.claude"
+        cp "$SCRIPT_DIR/.claude/settings.json" "$CLAUDEBOX_HOME/$PROJECT_NAME/workspace/.claude/"
+    }
 
-    echo_success "Vibecoding Stack installed"
     echo ""
-    echo "╔══════════════════════════════════════════════════════════════╗"
-    echo "║     PROJECT READY                                            ║"
-    echo "╚══════════════════════════════════════════════════════════════╝"
+    echo_success "Project ready!"
     echo ""
-    echo "  Start coding:"
-    echo ""
-    echo "    ${GREEN}vibecode shell $PROJECT_NAME${NC}"
-    echo "    ${GREEN}vibecode code $PROJECT_NAME${NC}"
+    echo -e "  ${GREEN}vibecode shell $PROJECT_NAME${NC}  Enter shell"
+    echo -e "  ${GREEN}vibecode code $PROJECT_NAME${NC}   Start Claude Code"
     echo ""
 }
 
 cmd_shell() {
-    if [ -z "$1" ]; then
-        echo_error "Usage: vibecode shell <project-name>"
-        exit 1
-    fi
-
-    PROJECT_NAME="$1"
-
-    if [ ! -d "$CLAUDEBOX_HOME/$PROJECT_NAME" ]; then
-        echo_error "Project not found: $PROJECT_NAME"
-        echo_info "Run: vibecode list"
-        exit 1
-    fi
-
-    echo_info "Entering ${GREEN}$PROJECT_NAME${NC} environment..."
-    claudebox shell "$PROJECT_NAME"
+    [ -z "$1" ] && { echo_error "Usage: vibecode shell <project>"; exit 1; }
+    [ ! -d "$CLAUDEBOX_HOME/$1" ] && { echo_error "Project not found: $1"; exit 1; }
+    claudebox shell "$1"
 }
 
 cmd_code() {
-    if [ -z "$1" ]; then
-        echo_error "Usage: vibecode code <project-name>"
-        exit 1
-    fi
-
-    PROJECT_NAME="$1"
-
-    if [ ! -d "$CLAUDEBOX_HOME/$PROJECT_NAME" ]; then
-        echo_error "Project not found: $PROJECT_NAME"
-        exit 1
-    fi
-
-    echo_info "Starting Claude Code in ${GREEN}$PROJECT_NAME${NC}..."
-    claudebox exec "$PROJECT_NAME" "cd /workspace && claude"
+    [ -z "$1" ] && { echo_error "Usage: vibecode code <project>"; exit 1; }
+    [ ! -d "$CLAUDEBOX_HOME/$1" ] && { echo_error "Project not found: $1"; exit 1; }
+    claudebox exec "$1" "cd /workspace && claude"
 }
 
 cmd_list() {
-    show_banner
-    echo "Isolated Projects:"
+    show_mini_banner
     echo ""
 
     if [ ! -d "$CLAUDEBOX_HOME" ] || [ -z "$(ls -A "$CLAUDEBOX_HOME" 2>/dev/null)" ]; then
-        echo_warning "No projects found"
-        echo_info "Create one with: vibecode new <project-name>"
+        echo "  No projects yet."
+        echo "  Create one: ${GREEN}vibecode new <name>${NC}"
         echo ""
         return
     fi
 
     for project in "$CLAUDEBOX_HOME"/*; do
-        if [ -d "$project" ]; then
-            PROJECT_NAME=$(basename "$project")
+        [ -d "$project" ] || continue
+        NAME=$(basename "$project")
+        SIZE=$(du -sh "$project" 2>/dev/null | cut -f1)
 
-            # Check if vibecoding is installed
-            if [ -f "$project/workspace/autocoder/mcp_server/vibecoding_server.py" ]; then
-                STATUS="${GREEN}✓ vibecoding${NC}"
-            else
-                STATUS="${YELLOW}⚠ no vibecoding${NC}"
-            fi
-
-            # Get size
-            SIZE=$(du -sh "$project" 2>/dev/null | cut -f1)
-
-            echo -e "  ${CYAN}$PROJECT_NAME${NC}"
-            echo -e "    Status: $STATUS"
-            echo -e "    Size:   $SIZE"
-            echo -e "    Path:   $project"
-            echo ""
+        if [ -f "$project/workspace/autocoder/mcp_server/vibecoding_server.py" ]; then
+            echo -e "  ${GREEN}●${NC} ${BOLD}$NAME${NC} ${DIM}($SIZE)${NC}"
+        else
+            echo -e "  ${YELLOW}●${NC} ${BOLD}$NAME${NC} ${DIM}($SIZE, no stack)${NC}"
         fi
     done
+    echo ""
 }
 
 cmd_status() {
-    PROJECT_NAME="$1"
+    [ -z "$1" ] && { cmd_list; return; }
+    [ ! -d "$CLAUDEBOX_HOME/$1" ] && { echo_error "Project not found: $1"; exit 1; }
 
-    if [ -z "$PROJECT_NAME" ]; then
-        cmd_list
-        return
-    fi
-
-    if [ ! -d "$CLAUDEBOX_HOME/$PROJECT_NAME" ]; then
-        echo_error "Project not found: $PROJECT_NAME"
-        exit 1
-    fi
-
-    show_banner
-    echo "Project: ${GREEN}$PROJECT_NAME${NC}"
+    show_mini_banner
+    echo ""
+    echo "  Project: ${BOLD}$1${NC}"
     echo ""
 
-    PROJECT_PATH="$CLAUDEBOX_HOME/$PROJECT_NAME"
-
-    # Check components
-    echo "Components:"
-
-    if [ -d "$PROJECT_PATH/workspace/autocoder" ]; then
-        echo -e "  ${GREEN}✓${NC} Autocoder"
-    else
-        echo -e "  ${RED}✗${NC} Autocoder"
-    fi
-
-    if [ -f "$PROJECT_PATH/workspace/autocoder/mcp_server/vibecoding_server.py" ]; then
-        echo -e "  ${GREEN}✓${NC} MCP Server"
-    else
-        echo -e "  ${RED}✗${NC} MCP Server"
-    fi
-
-    if [ -d "$PROJECT_PATH/workspace/.claude" ]; then
-        echo -e "  ${GREEN}✓${NC} Claude Config"
-    else
-        echo -e "  ${RED}✗${NC} Claude Config"
-    fi
-
+    P="$CLAUDEBOX_HOME/$1"
+    [ -d "$P/workspace/autocoder" ] && echo -e "    ${GREEN}✓${NC} Autocoder" || echo -e "    ${RED}✗${NC} Autocoder"
+    [ -f "$P/workspace/autocoder/mcp_server/vibecoding_server.py" ] && echo -e "    ${GREEN}✓${NC} MCP Server" || echo -e "    ${RED}✗${NC} MCP Server"
+    [ -d "$P/workspace/.claude" ] && echo -e "    ${GREEN}✓${NC} Claude Config" || echo -e "    ${RED}✗${NC} Claude Config"
     echo ""
-    echo "Storage:"
-    SIZE=$(du -sh "$PROJECT_PATH" 2>/dev/null | cut -f1)
-    echo "  Total: $SIZE"
-    echo ""
-    echo "Actions:"
-    echo "  ${GREEN}vibecode shell $PROJECT_NAME${NC}   - Enter shell"
-    echo "  ${GREEN}vibecode code $PROJECT_NAME${NC}    - Start Claude Code"
+    echo "  Size: $(du -sh "$P" 2>/dev/null | cut -f1)"
     echo ""
 }
 
 cmd_remove() {
-    if [ -z "$1" ]; then
-        echo_error "Usage: vibecode remove <project-name>"
-        exit 1
-    fi
+    [ -z "$1" ] && { echo_error "Usage: vibecode remove <project>"; exit 1; }
+    [ ! -d "$CLAUDEBOX_HOME/$1" ] && { echo_error "Project not found: $1"; exit 1; }
 
-    PROJECT_NAME="$1"
+    echo_warning "This will DELETE: $1"
+    read -p "Type 'yes' to confirm: " CONFIRM
+    [ "$CONFIRM" = "yes" ] || { echo "Cancelled"; exit 0; }
 
-    if [ ! -d "$CLAUDEBOX_HOME/$PROJECT_NAME" ]; then
-        echo_error "Project not found: $PROJECT_NAME"
-        exit 1
-    fi
-
-    echo_warning "This will DELETE the project: $PROJECT_NAME"
-    read -p "Are you sure? (yes/no): " CONFIRM
-
-    if [ "$CONFIRM" != "yes" ]; then
-        echo "Cancelled"
-        exit 0
-    fi
-
-    claudebox remove "$PROJECT_NAME"
-    echo_success "Project removed: $PROJECT_NAME"
+    claudebox remove "$1"
+    echo_success "Removed: $1"
 }
-
-# =============================================================================
-# DASHBOARD COMMAND
-# =============================================================================
 
 cmd_dashboard() {
     PORT="${1:-8080}"
 
-    echo_step "Starting Vibecode Dashboard on port $PORT..."
-    echo ""
+    [ ! -f "$SCRIPT_DIR/dashboard/server.py" ] && { echo_error "Dashboard not found"; exit 1; }
 
-    if [ ! -f "$SCRIPT_DIR/dashboard/server.py" ]; then
-        echo_error "Dashboard server not found"
-        echo_info "Expected at: $SCRIPT_DIR/dashboard/server.py"
-        exit 1
-    fi
-
-    # Ensure log directory exists
     mkdir -p "$HOME/.claude/logs"
 
-    # Auto-open port on Lightsail if AWS CLI is configured
-    if command -v aws &>/dev/null && aws sts get-caller-identity &>/dev/null 2>&1; then
-        INSTANCE_NAME="${LIGHTSAIL_INSTANCE:-}"
-        if [ -z "$INSTANCE_NAME" ]; then
-            INSTANCE_NAME=$(aws lightsail get-instances --query 'instances[0].name' --output text 2>/dev/null)
-        fi
-        if [ -n "$INSTANCE_NAME" ] && [ "$INSTANCE_NAME" != "None" ]; then
-            echo_step "Opening port $PORT on Lightsail firewall..."
-            if aws lightsail open-instance-public-ports \
-                --instance-name "$INSTANCE_NAME" \
-                --port-info "fromPort=$PORT,toPort=$PORT,protocol=tcp" 2>/dev/null; then
-                echo_success "Port $PORT opened on $INSTANCE_NAME"
-            fi
-        fi
+    # Auto-open port if AWS configured
+    if aws sts get-caller-identity &>/dev/null 2>&1; then
+        INSTANCE=$(aws lightsail get-instances --query 'instances[0].name' --output text 2>/dev/null)
+        [ -n "$INSTANCE" ] && [ "$INSTANCE" != "None" ] && {
+            aws lightsail open-instance-public-ports \
+                --instance-name "$INSTANCE" \
+                --port-info "fromPort=$PORT,toPort=$PORT,protocol=tcp" 2>/dev/null && \
+                echo_success "Port $PORT opened on Lightsail"
+        }
     fi
 
-    # Start server
+    echo_step "Starting dashboard on port $PORT..."
     python3 "$SCRIPT_DIR/dashboard/server.py" "$PORT"
+}
+
+# =============================================================================
+# HELP
+# =============================================================================
+
+cmd_help() {
+    show_banner
+    echo -e "  ${BOLD}Usage:${NC} vibecode <command> [options]"
+    echo ""
+    echo -e "  ${BOLD}Getting Started:${NC}"
+    echo -e "    ${GREEN}install${NC} [--server]        Install the full vibecoding stack"
+    echo -e "    ${GREEN}setup${NC}                     Configure credentials (AWS, OpenAI)"
+    echo ""
+    echo -e "  ${BOLD}Projects (isolated containers):${NC}"
+    echo -e "    ${GREEN}init${NC}                      Install ClaudeBox for isolation"
+    echo -e "    ${GREEN}new${NC} <name> [profile]      Create new project"
+    echo -e "    ${GREEN}shell${NC} <name>              Enter project shell"
+    echo -e "    ${GREEN}code${NC} <name>               Start Claude Code in project"
+    echo -e "    ${GREEN}list${NC}                      List all projects"
+    echo -e "    ${GREEN}status${NC} [name]             Show project status"
+    echo -e "    ${GREEN}remove${NC} <name>             Delete project"
+    echo ""
+    echo -e "  ${BOLD}Server/Mobile:${NC}"
+    echo -e "    ${GREEN}dashboard${NC} [port]          Start web dashboard"
+    echo -e "    ${GREEN}lightsail${NC} <cmd>           Lightsail helpers (session, ports)"
+    echo ""
+    echo -e "  ${BOLD}Examples:${NC}"
+    echo -e "    vibecode install --server        ${DIM}Full server setup${NC}"
+    echo -e "    vibecode new my-api python       ${DIM}Create Python project${NC}"
+    echo -e "    vibecode shell my-api            ${DIM}Enter project${NC}"
+    echo -e "    vibecode dashboard 8080          ${DIM}Start dashboard${NC}"
+    echo ""
+    echo -e "  ${DIM}Profiles: python, javascript, go, rust, java, php, ruby, c, cpp${NC}"
+    echo ""
 }
 
 # =============================================================================
@@ -826,49 +688,22 @@ cmd_dashboard() {
 COMMAND="${1:-help}"
 
 case "$COMMAND" in
-    init)
-        cmd_init
-        ;;
-    new)
-        shift
-        cmd_new "$@"
-        ;;
-    shell)
-        shift
-        cmd_shell "$@"
-        ;;
-    code)
-        shift
-        cmd_code "$@"
-        ;;
-    list|ls)
-        cmd_list
-        ;;
-    status)
-        shift
-        cmd_status "$@"
-        ;;
-    remove|rm)
-        shift
-        cmd_remove "$@"
-        ;;
-    lightsail|ls-mobile|mobile)
-        shift
-        cmd_lightsail "$@"
-        ;;
-    dashboard|dash)
-        shift
-        cmd_dashboard "$@"
-        ;;
-    setup)
-        cmd_setup
-        ;;
-    help|--help|-h)
-        cmd_help
-        ;;
+    install)      shift; cmd_install "$@" ;;
+    setup)        cmd_setup ;;
+    init)         cmd_init ;;
+    new)          shift; cmd_new "$@" ;;
+    shell)        shift; cmd_shell "$@" ;;
+    code)         shift; cmd_code "$@" ;;
+    list|ls)      cmd_list ;;
+    status)       shift; cmd_status "$@" ;;
+    remove|rm)    shift; cmd_remove "$@" ;;
+    lightsail)    shift; cmd_lightsail "$@" ;;
+    dashboard)    shift; cmd_dashboard "$@" ;;
+    help|--help|-h) cmd_help ;;
+    -v|--version) echo "vibecode $VERSION" ;;
     *)
         echo_error "Unknown command: $COMMAND"
-        echo_info "Run: vibecode help"
+        echo -e "Run: ${GREEN}vibecode help${NC}"
         exit 1
         ;;
 esac
