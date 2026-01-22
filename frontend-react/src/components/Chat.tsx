@@ -1,8 +1,10 @@
 import { useState, useRef, useEffect } from 'preact/hooks';
 import type { ChatMessage, LogEntry } from '../types';
-import { ActionSheet } from './Modal';
+import { ActionSheet, Modal } from './Modal';
 import { useMcpServers } from '../hooks/useApi';
 import { Toggle } from './Toggle';
+
+const VISIBLE_MESSAGE_COUNT = 6;
 
 interface ChatProps {
   messages: ChatMessage[];
@@ -20,8 +22,13 @@ export function Chat({ messages, loading, branch, onSend, onStop, onClear, onSho
   const [showActionMenu, setShowActionMenu] = useState(false);
   const [showDebugLogs, setShowDebugLogs] = useState(false);
   const [showMcpPanel, setShowMcpPanel] = useState(false);
+  const [showAllMessages, setShowAllMessages] = useState(false);
   const [debugLogs, setDebugLogs] = useState<LogEntry[]>([]);
   const [logsLoading, setLogsLoading] = useState(false);
+
+  // Calculate visible messages (show last N)
+  const hiddenCount = Math.max(0, messages.length - VISIBLE_MESSAGE_COUNT);
+  const visibleMessages = hiddenCount > 0 ? messages.slice(-VISIBLE_MESSAGE_COUNT) : messages;
   const messagesRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const pollRef = useRef<number | null>(null);
@@ -256,9 +263,21 @@ export function Chat({ messages, loading, branch, onSend, onStop, onClear, onSho
           </div>
         ) : (
           <>
-            {messages.map((msg, i) => (
+            {/* See earlier messages button */}
+            {hiddenCount > 0 && (
+              <button
+                onClick={() => setShowAllMessages(true)}
+                className="w-full py-2 px-4 text-sm text-gray-400 hover:text-white bg-gray-800/50 hover:bg-gray-800 rounded-lg transition-colors flex items-center justify-center gap-2"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
+                </svg>
+                See {hiddenCount} earlier message{hiddenCount > 1 ? 's' : ''}
+              </button>
+            )}
+            {visibleMessages.map((msg, i) => (
               <div
-                key={`msg-${i}`}
+                key={`msg-${hiddenCount + i}`}
                 className={
                   msg.role === 'user'
                     ? 'bg-blue-600 rounded-lg p-3 ml-4 md:ml-8'
@@ -444,6 +463,29 @@ export function Chat({ messages, loading, branch, onSend, onStop, onClear, onSho
           </button>
         </div>
       </ActionSheet>
+
+      {/* All Messages Modal */}
+      <Modal isOpen={showAllMessages} onClose={() => setShowAllMessages(false)} title="Chat History">
+        <div className="space-y-3 max-h-[70vh] overflow-y-auto">
+          {messages.map((msg, i) => (
+            <div
+              key={`modal-msg-${i}`}
+              className={
+                msg.role === 'user'
+                  ? 'bg-blue-600 rounded-lg p-3 ml-4'
+                  : msg.role === 'error'
+                  ? 'bg-red-600/20 text-red-400 rounded-lg p-3'
+                  : 'bg-gray-700 rounded-lg p-3 mr-4'
+              }
+            >
+              <div
+                className="text-sm chat-content"
+                dangerouslySetInnerHTML={{ __html: formatMessage(msg.content) }}
+              />
+            </div>
+          ))}
+        </div>
+      </Modal>
     </div>
   );
 }

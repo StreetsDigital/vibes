@@ -58,8 +58,10 @@ export function App() {
 
   return (
     <div className="bg-gray-900 text-gray-100 min-h-screen flex flex-col">
-      {/* Header - sticky on desktop */}
-      <header className="bg-gray-800 border-b border-gray-700 px-4 py-3 flex-shrink-0 md:sticky md:top-0 z-50">
+      {/* Sticky header + tabs container on desktop */}
+      <div className="md:sticky md:top-0 z-50 flex-shrink-0">
+      {/* Header */}
+      <header className="bg-gray-800 border-b border-gray-700 px-4 py-3">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <h1 className="text-lg font-bold text-blue-400">⚡</h1>
@@ -153,7 +155,7 @@ export function App() {
       </div>
 
       {/* Desktop Tab Bar */}
-      <div className="hidden md:flex border-b border-gray-700 bg-gray-800 flex-shrink-0 justify-center">
+      <div className="hidden md:flex border-b border-gray-700 bg-gray-800 justify-center">
         <TabButton
           active={currentView === 'board'}
           onClick={() => setCurrentView('board')}
@@ -180,6 +182,7 @@ export function App() {
           label="Logs"
         />
       </div>
+      </div>{/* End sticky header + tabs container */}
 
       {/* Main Content */}
       <div className="flex flex-1 overflow-hidden">
