@@ -22,19 +22,52 @@ import subprocess
 import asyncio
 import hashlib
 import secrets
+import threading
+import queue
 from pathlib import Path
 from datetime import datetime
 from functools import wraps
 from flask import Flask, request, jsonify, send_from_directory, Response
+from flask_cors import CORS
 
 # Add mcp_server to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "mcp_server"))
 
 from gastown_integration import BeadStore, Bead, BeadStatus, Mayor
+from realtime import (
+    event_bus, EventType, Event, SSEStream, ClaudeStreamReader,
+    emit_board_update, emit_chat_message, emit_task_event, emit_logs
+)
+from task_progress import (
+    TaskProgressTracker, TaskStage, detect_stage_from_output, generate_auto_retro
+)
+
+# Global progress tracker
+def emit_progress(data):
+    """Emit progress update to all clients."""
+    if WEBSOCKET_ENABLED:
+        socketio.emit('task:progress', data['data'])
+    event_bus.emit_typed(EventType.CLAUDE_OUTPUT, data['data'])
+
+progress_tracker = TaskProgressTracker(emit_progress)
 
 # Serve from React build (frontend-react/dist)
 STATIC_DIR = Path(__file__).parent.parent / "frontend-react" / "dist"
 app = Flask(__name__, static_folder=str(STATIC_DIR))
+CORS(app)
+
+# Try to import Flask-SocketIO for WebSocket support
+try:
+    from flask_socketio import SocketIO, emit as ws_emit, join_room, leave_room
+    socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
+    WEBSOCKET_ENABLED = True
+except ImportError:
+    socketio = None
+    WEBSOCKET_ENABLED = False
+    print("[vibes] WebSocket disabled - install flask-socketio for real-time features")
+
+# Claude stream reader for SSE
+claude_streamer = ClaudeStreamReader(event_bus)
 
 # Global state
 _project_dir: Path = None
@@ -237,6 +270,9 @@ def create_task():
         priority=data.get("priority", 0)
     )
 
+    # Broadcast update to all clients
+    broadcast_board_update()
+
     return jsonify({
         "success": True,
         "bead_id": bead.id,
@@ -276,6 +312,9 @@ def move_task(task_id):
     bead.status = new_status
     _bead_store.save(bead, f"Move {bead.name}: {old_status} -> {new_status}")
 
+    # Broadcast update to all clients
+    broadcast_board_update()
+
     return jsonify({
         "success": True,
         "bead_id": task_id,
@@ -292,6 +331,10 @@ def delete_task(task_id):
         return jsonify({"error": "Not initialized"}), 500
 
     result = _bead_store.delete(task_id)
+
+    # Broadcast update to all clients
+    broadcast_board_update()
+
     return jsonify(result)
 
 
@@ -818,6 +861,20 @@ def run_autonomous_claude(parallel_agents: int = 1):
 
     print(f"[autowork] Starting autonomous mode with {parallel_agents} agent(s)")
 
+    # Get first pending task for progress tracking
+    current_task_id = None
+    current_task_name = "Autonomous work"
+    if _bead_store:
+        beads = _bead_store.load_all()
+        pending = [b for b in beads if str(b.status) in ["pending", "BeadStatus.PENDING"]]
+        if pending:
+            current_task_id = pending[0].id
+            current_task_name = pending[0].name
+
+    # Start progress tracking
+    if current_task_id:
+        progress_tracker.start_task(current_task_id, current_task_name)
+
     # Add starting message to chat immediately
     history = load_chat_history()
     history.append({
@@ -863,14 +920,30 @@ def run_autonomous_claude(parallel_agents: int = 1):
             bufsize=1  # Line buffered
         )
 
-        # Stream output and update chat periodically
+        # Stream output and update chat/progress periodically
         output_lines = []
         last_update = time.time()
+        last_stage_check = time.time()
         update_interval = 10  # Update chat every 10 seconds
+        stage_check_interval = 3  # Check for stage changes every 3 seconds
+        last_detected_stage = None
 
         for line in iter(process.stdout.readline, ''):
             output_lines.append(line)
             print(f"[autowork] {line.rstrip()}")
+
+            # Check for stage changes in output
+            if current_task_id and time.time() - last_stage_check > stage_check_interval:
+                last_stage_check = time.time()
+                recent_output = ''.join(output_lines[-10:])
+                detected_stage = detect_stage_from_output(recent_output)
+                if detected_stage and detected_stage != last_detected_stage:
+                    last_detected_stage = detected_stage
+                    progress_tracker.update_stage(
+                        current_task_id,
+                        detected_stage,
+                        line.strip()[:100]  # Use current line as message
+                    )
 
             # Periodic update to chat
             if time.time() - last_update > update_interval:
@@ -891,16 +964,31 @@ def run_autonomous_claude(parallel_agents: int = 1):
         if process.returncode == 0:
             print(f"[autowork] Completed successfully")
 
+            # Generate 2-sentence retro
+            retro = generate_auto_retro(current_task_name, stdout[-500:])
+
+            # Complete progress tracking with retro
+            if current_task_id:
+                progress_tracker.complete_task(current_task_id, retro)
+
             # Save final output to chat history
             history = load_chat_history()
             history.append({
                 "role": "assistant",
-                "content": f"✅ **Autonomous work complete!**\n\n{stdout[-2000:] if len(stdout) > 2000 else stdout}",
+                "content": f"✅ **Autonomous work complete!**\n\n📋 **Retro:** {retro}\n\n{stdout[-1500:] if len(stdout) > 1500 else stdout}",
                 "timestamp": datetime.now().isoformat()
             })
             save_chat_history(history[-100:])
+
+            # Broadcast board update
+            broadcast_board_update()
         else:
             print(f"[autowork] Error: returncode={process.returncode}")
+
+            # Mark progress as failed
+            if current_task_id:
+                progress_tracker.fail_task(current_task_id, f"Exit code: {process.returncode}")
+
             history = load_chat_history()
             history.append({
                 "role": "assistant",
@@ -1930,6 +2018,463 @@ def route_config_request():
 
 
 # ===========================================
+# WebSocket Event Handlers
+# ===========================================
+
+if WEBSOCKET_ENABLED:
+    @socketio.on('connect')
+    def handle_connect():
+        """Handle WebSocket connection."""
+        print(f"[ws] Client connected: {request.sid}")
+        # Send initial board state
+        if _bead_store:
+            beads = _bead_store.load_all()
+            board = {"todo": [], "in_progress": [], "review": [], "done": []}
+            status_map = {"pending": "todo", "in_progress": "in_progress",
+                          "needs_review": "review", "passing": "done"}
+            for bead in beads:
+                status = bead.status.value if isinstance(bead.status, BeadStatus) else bead.status
+                column = status_map.get(status, "todo")
+                board[column].append(bead.to_feature_dict())
+            ws_emit('board:update', {'board': board, 'stats': _bead_store.get_stats()})
+
+    @socketio.on('disconnect')
+    def handle_disconnect():
+        """Handle WebSocket disconnection."""
+        print(f"[ws] Client disconnected: {request.sid}")
+
+    @socketio.on('subscribe')
+    def handle_subscribe(data):
+        """Subscribe to specific event types."""
+        room = data.get('room', 'all')
+        join_room(room)
+        print(f"[ws] Client {request.sid} joined room: {room}")
+
+    @socketio.on('unsubscribe')
+    def handle_unsubscribe(data):
+        """Unsubscribe from event types."""
+        room = data.get('room', 'all')
+        leave_room(room)
+
+    @socketio.on('chat:send')
+    def handle_chat_send(data):
+        """Handle chat message via WebSocket with streaming response."""
+        message = data.get('message', '')
+        if not message:
+            ws_emit('chat:error', {'error': 'No message provided'})
+            return
+
+        # Add user message
+        history = load_chat_history()
+        history.append({
+            "role": "user",
+            "content": message,
+            "timestamp": datetime.now().isoformat()
+        })
+        save_chat_history(history[-100:])
+
+        # Echo user message back
+        ws_emit('chat:message', {'role': 'user', 'content': message})
+
+        # Build context and run Claude with streaming
+        context = build_chat_context()
+
+        def stream_callback(chunk: str):
+            """Callback for streaming chunks."""
+            socketio.emit('chat:stream', {'chunk': chunk}, room=request.sid)
+
+        # Run in thread to not block
+        def run_claude_stream():
+            try:
+                response = run_claude_prompt_streaming(message, context, history[:-1], stream_callback)
+                # Save final response
+                history = load_chat_history()
+                history.append({
+                    "role": "assistant",
+                    "content": response,
+                    "timestamp": datetime.now().isoformat()
+                })
+                save_chat_history(history[-100:])
+                socketio.emit('chat:stream:end', {'content': response}, room=request.sid)
+            except Exception as e:
+                socketio.emit('chat:error', {'error': str(e)}, room=request.sid)
+
+        threading.Thread(target=run_claude_stream, daemon=True).start()
+
+    @socketio.on('board:refresh')
+    def handle_board_refresh():
+        """Request board refresh."""
+        if _bead_store:
+            beads = _bead_store.load_all()
+            board = {"todo": [], "in_progress": [], "review": [], "done": []}
+            status_map = {"pending": "todo", "in_progress": "in_progress",
+                          "needs_review": "review", "passing": "done"}
+            for bead in beads:
+                status = bead.status.value if isinstance(bead.status, BeadStatus) else bead.status
+                column = status_map.get(status, "todo")
+                board[column].append(bead.to_feature_dict())
+            ws_emit('board:update', {'board': board, 'stats': _bead_store.get_stats()})
+
+
+def run_claude_prompt_streaming(message: str, context: str, history: list, callback) -> str:
+    """Run Claude prompt with streaming output."""
+    global _current_claude_process
+
+    # Build conversation history
+    history_text = ""
+    if history:
+        recent = history[-6:]
+        history_lines = []
+        for msg in recent:
+            role = "User" if msg["role"] == "user" else "Assistant"
+            content = msg['content']
+            if len(content) > 300:
+                content = content[:300] + "..."
+            history_lines.append(f"{role}: {content}")
+        if history_lines:
+            history_text = "\n\n## Recent Conversation:\n" + "\n\n".join(history_lines)
+
+    full_prompt = f"""You are helping with a task board. Here's the current state:
+
+{context}{history_text}
+
+User message: {message}
+
+Respond helpfully and concisely."""
+
+    try:
+        import tempfile
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
+            f.write(full_prompt)
+            prompt_file = f.name
+        os.chmod(prompt_file, 0o644)
+
+        mcp_config = "/home/vibes/.claude/settings.json"
+        cmd = f'runuser -u vibes -- bash -c \'cd "{_project_dir}" && claude --print --dangerously-skip-permissions --mcp-config {mcp_config} -p "$(cat {prompt_file})"\''
+
+        _current_claude_process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            cwd=str(_project_dir),
+            env={**os.environ, "HOME": "/home/vibes"},
+            shell=True,
+            bufsize=1
+        )
+
+        output_chunks = []
+        buffer = ""
+
+        # Stream character by character for real-time output
+        for char in iter(lambda: _current_claude_process.stdout.read(1), ''):
+            buffer += char
+            output_chunks.append(char)
+
+            # Send chunk on newline or every 50 chars
+            if char == '\n' or len(buffer) >= 50:
+                callback(buffer)
+                buffer = ""
+
+        # Send remaining buffer
+        if buffer:
+            callback(buffer)
+
+        _current_claude_process.wait()
+
+        return ''.join(output_chunks).strip()
+
+    except Exception as e:
+        return f"Error: {str(e)}"
+    finally:
+        _current_claude_process = None
+        try:
+            os.unlink(prompt_file)
+        except:
+            pass
+
+
+# ===========================================
+# SSE Endpoints (Server-Sent Events)
+# ===========================================
+
+@app.route('/api/stream/events')
+@requires_auth
+def stream_events():
+    """
+    Stream all real-time events via SSE.
+
+    Connect with EventSource:
+        const es = new EventSource('/api/stream/events');
+        es.addEventListener('board:update', (e) => console.log(JSON.parse(e.data)));
+    """
+    stream = SSEStream(event_bus)
+    return Response(
+        stream.generate(),
+        mimetype='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'X-Accel-Buffering': 'no',
+            'Connection': 'keep-alive'
+        }
+    )
+
+
+@app.route('/api/stream/chat', methods=['POST'])
+@requires_auth
+def stream_chat():
+    """
+    Stream Claude chat response via SSE.
+
+    POST with message, returns SSE stream of response chunks.
+    """
+    data = request.json
+    message = data.get("message", "")
+
+    if not message:
+        return jsonify({"error": "No message provided"}), 400
+
+    # Add user message
+    history = load_chat_history()
+    history.append({
+        "role": "user",
+        "content": message,
+        "timestamp": datetime.now().isoformat()
+    })
+    save_chat_history(history[-100:])
+
+    # Build context
+    context = build_chat_context()
+
+    # Build prompt
+    history_text = ""
+    if history[:-1]:
+        recent = history[-7:-1]
+        history_lines = []
+        for msg in recent:
+            role = "User" if msg["role"] == "user" else "Assistant"
+            content = msg['content'][:300] + "..." if len(msg['content']) > 300 else msg['content']
+            history_lines.append(f"{role}: {content}")
+        if history_lines:
+            history_text = "\n\n## Recent Conversation:\n" + "\n\n".join(history_lines)
+
+    full_prompt = f"""You are helping with a task board. Here's the current state:
+
+{context}{history_text}
+
+User message: {message}
+
+Respond helpfully and concisely."""
+
+    def generate():
+        global _current_claude_process
+        full_response = []
+
+        try:
+            import tempfile
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
+                f.write(full_prompt)
+                prompt_file = f.name
+            os.chmod(prompt_file, 0o644)
+
+            mcp_config = "/home/vibes/.claude/settings.json"
+            cmd = f'runuser -u vibes -- bash -c \'cd "{_project_dir}" && claude --print --dangerously-skip-permissions --mcp-config {mcp_config} -p "$(cat {prompt_file})"\''
+
+            _current_claude_process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                cwd=str(_project_dir),
+                env={**os.environ, "HOME": "/home/vibes"},
+                shell=True,
+                bufsize=1
+            )
+
+            buffer = ""
+            for char in iter(lambda: _current_claude_process.stdout.read(1), ''):
+                buffer += char
+                full_response.append(char)
+
+                if char == '\n' or len(buffer) >= 30:
+                    yield f"event: chunk\ndata: {json.dumps({'text': buffer})}\n\n"
+                    buffer = ""
+
+            if buffer:
+                yield f"event: chunk\ndata: {json.dumps({'text': buffer})}\n\n"
+
+            _current_claude_process.wait()
+
+            # Save complete response
+            complete_response = ''.join(full_response).strip()
+            history = load_chat_history()
+            history.append({
+                "role": "assistant",
+                "content": complete_response,
+                "timestamp": datetime.now().isoformat()
+            })
+            save_chat_history(history[-100:])
+
+            yield f"event: done\ndata: {json.dumps({'content': complete_response})}\n\n"
+
+        except Exception as e:
+            yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
+        finally:
+            _current_claude_process = None
+            try:
+                os.unlink(prompt_file)
+            except:
+                pass
+
+    return Response(
+        generate(),
+        mimetype='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'X-Accel-Buffering': 'no'
+        }
+    )
+
+
+@app.route('/api/stream/logs')
+@requires_auth
+def stream_logs():
+    """
+    Stream log entries via SSE.
+
+    Polls for new logs every second and streams them.
+    """
+    filter_type = request.args.get('filter', 'all')
+    last_id = None
+
+    def generate():
+        nonlocal last_id
+        import re
+        from pathlib import Path
+
+        # Send initial connection
+        yield f"event: connected\ndata: {json.dumps({'filter': filter_type})}\n\n"
+
+        while True:
+            try:
+                debug_dir = Path.home() / '.claude' / 'debug'
+                logs = []
+
+                if debug_dir.exists():
+                    debug_files = sorted(debug_dir.glob('*.txt'), key=lambda f: f.stat().st_mtime, reverse=True)[:3]
+
+                    for debug_file in debug_files:
+                        try:
+                            content = debug_file.read_text()
+                            for line in content.split('\n')[-50:]:  # Last 50 lines
+                                if not line.strip():
+                                    continue
+
+                                match = re.match(r'^(\d{4}-\d{2}-\d{2}T[\d:.]+Z)\s+\[(\w+)\]\s+(.*)$', line)
+                                if match:
+                                    timestamp, level, message = match.groups()
+                                    log_id = f"{debug_file.stem}_{hash(line)}"
+
+                                    if last_id and log_id == last_id:
+                                        continue
+
+                                    level = level.lower()
+                                    source = 'claude' if 'mcp' in message.lower() else 'system'
+
+                                    if filter_type == 'error' and level != 'error':
+                                        continue
+                                    elif filter_type == 'claude' and source != 'claude':
+                                        continue
+                                    elif filter_type == 'system' and source != 'system':
+                                        continue
+
+                                    logs.append({
+                                        'id': log_id,
+                                        'timestamp': timestamp,
+                                        'level': level,
+                                        'source': source,
+                                        'message': message[:500]
+                                    })
+                                    last_id = log_id
+                        except:
+                            pass
+
+                if logs:
+                    yield f"event: logs\ndata: {json.dumps({'entries': logs[-20:]})}\n\n"
+                else:
+                    yield f": heartbeat\n\n"
+
+                import time
+                time.sleep(1)
+
+            except GeneratorExit:
+                break
+
+    return Response(
+        generate(),
+        mimetype='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'X-Accel-Buffering': 'no'
+        }
+    )
+
+
+@app.route('/api/realtime/status')
+@requires_auth
+def realtime_status():
+    """Get real-time system status."""
+    return jsonify({
+        "websocket_enabled": WEBSOCKET_ENABLED,
+        "sse_enabled": True,
+        "endpoints": {
+            "websocket": "/socket.io" if WEBSOCKET_ENABLED else None,
+            "sse_events": "/api/stream/events",
+            "sse_chat": "/api/stream/chat",
+            "sse_logs": "/api/stream/logs"
+        }
+    })
+
+
+@app.route('/api/tasks/progress')
+@requires_auth
+def get_task_progress():
+    """Get current task progress for all active tasks."""
+    return jsonify({
+        "tasks": progress_tracker.get_all_progress()
+    })
+
+
+# ===========================================
+# Broadcast helpers for emitting events
+# ===========================================
+
+def broadcast_board_update():
+    """Broadcast board update to all connected clients."""
+    if not _bead_store:
+        return
+
+    beads = _bead_store.load_all()
+    board = {"todo": [], "in_progress": [], "review": [], "done": []}
+    status_map = {"pending": "todo", "in_progress": "in_progress",
+                  "needs_review": "review", "passing": "done"}
+
+    for bead in beads:
+        status = bead.status.value if isinstance(bead.status, BeadStatus) else bead.status
+        column = status_map.get(status, "todo")
+        board[column].append(bead.to_feature_dict())
+
+    data = {'board': board, 'stats': _bead_store.get_stats()}
+
+    # WebSocket broadcast
+    if WEBSOCKET_ENABLED:
+        socketio.emit('board:update', data)
+
+    # SSE broadcast via event bus
+    emit_board_update(data)
+
+
+# ===========================================
 # Main
 # ===========================================
 
@@ -1964,4 +2509,11 @@ if __name__ == "__main__":
     init_app(str(project_dir), projects_root)
 
     print(f"[vibes-frontend] Starting server on http://{args.host}:{args.port}")
-    app.run(host=args.host, port=args.port, debug=True)
+    print(f"[vibes-frontend] WebSocket: {'enabled' if WEBSOCKET_ENABLED else 'disabled'}")
+    print(f"[vibes-frontend] SSE: enabled")
+
+    # Use SocketIO if available for WebSocket support, otherwise plain Flask
+    if WEBSOCKET_ENABLED:
+        socketio.run(app, host=args.host, port=args.port, debug=True, allow_unsafe_werkzeug=True)
+    else:
+        app.run(host=args.host, port=args.port, debug=True)

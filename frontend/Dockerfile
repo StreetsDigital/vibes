@@ -3,8 +3,16 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install dependencies
-RUN pip install --no-cache-dir flask flask-cors pyyaml sqlalchemy mcp
+# Install dependencies (including WebSocket support)
+RUN pip install --no-cache-dir \
+    flask \
+    flask-cors \
+    flask-socketio \
+    python-socketio \
+    eventlet \
+    pyyaml \
+    sqlalchemy \
+    mcp
 
 # Install Claude CLI and Skills tools
 RUN apt-get update && apt-get install -y curl git sudo && \
