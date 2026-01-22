@@ -41,23 +41,19 @@ Autonomous coding with quality gates and continuous learning.
 
 ## Quick Start
 
-### Option 1: Lightsail + Mobile (Termius)
-
-Code from your phone with persistent sessions.
+### Option 1: Server Installation
 
 ```bash
-# On your Lightsail instance
+# Clone and install
 git clone https://github.com/StreetsDigital/vibes.git
-cd vibes && ./lightsail/setup.sh
+cd vibes
+./vibecode install --server
 
 # Start coding
-vibe my-project
+su - vibes
+cd ~/autocoder
 claude
 ```
-
-**4 tmux windows:** claude | shell | logs | scratch
-
-👉 **[Full guide: lightsail/README.md](lightsail/README.md)**
 
 ---
 
@@ -93,6 +89,8 @@ vibecode code my-project
 ### vibecode (Project Management)
 
 ```bash
+vibecode install [--server]        # Install the stack
+vibecode setup                     # Configure OpenAI API key
 vibecode init                      # Install ClaudeBox + dependencies
 vibecode new <project> [profile]   # Create isolated environment
 vibecode shell <project>           # Enter project shell
@@ -100,8 +98,6 @@ vibecode code <project>            # Start Claude Code
 vibecode list                      # List all projects
 vibecode status [project]          # Show project info
 vibecode remove <project>          # Delete project
-vibecode lightsail setup           # Install mobile environment
-vibecode lightsail session [name]  # Start/attach tmux session
 vibecode dashboard [port]          # Start web dashboard (default: 8080)
 ```
 
@@ -139,9 +135,6 @@ vibes/
 │   └── skills/
 │       ├── continuous-learning/  # Learning framework
 │       └── learned/              # Saved skills
-├── lightsail/
-│   ├── setup.sh                # Mobile setup script
-│   └── README.md               # Termius guide
 ├── dashboard/
 │   ├── server.py               # Web dashboard server
 │   └── log-event.sh            # Event logging script
@@ -209,7 +202,7 @@ vibecode dashboard 8080
 python3 dashboard/server.py 8080
 ```
 
-Access at `http://localhost:8080` (or your Lightsail IP).
+Access at `http://localhost:8080`.
 
 Features:
 - Real-time activity log with auto-refresh
@@ -261,4 +254,3 @@ Initialize with:
 - [EXAMPLE_WORKFLOW.md](EXAMPLE_WORKFLOW.md) - Building UI for adtech-proton
 - [CODESPACES.md](CODESPACES.md) - GitHub Codespaces setup
 - [GETTING_STARTED.md](GETTING_STARTED.md) - Local installation
-- [lightsail/README.md](lightsail/README.md) - Mobile coding with Termius

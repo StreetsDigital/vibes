@@ -6,14 +6,13 @@
 #
 # Usage:
 #   vibecode install [--server]      - Install the full stack
-#   vibecode setup                   - Configure credentials (AWS, OpenAI)
+#   vibecode setup                   - Configure credentials (OpenAI)
 #   vibecode new <project> [profile] - Create isolated project
 #   vibecode shell <project>         - Enter project shell
 #   vibecode code <project>          - Start Claude Code in project
 #   vibecode list                    - List projects
 #   vibecode status [project]        - Show status
 #   vibecode dashboard [port]        - Start web dashboard
-#   vibecode lightsail <cmd>         - Lightsail/mobile helpers
 #   vibecode help                    - Show help
 #
 
@@ -379,43 +378,12 @@ cmd_setup() {
     echo ""
 
     # Check current status
-    AWS_OK=false
     OPENAI_OK=false
-    [ -f "$HOME/.aws/credentials" ] && grep -q "aws_access_key_id" "$HOME/.aws/credentials" 2>/dev/null && AWS_OK=true
     [ -f "$HOME/.config/openai/api_key" ] && [ -s "$HOME/.config/openai/api_key" ] && OPENAI_OK=true
 
     echo "  Current status:"
-    $AWS_OK && echo -e "    ${GREEN}✓${NC} AWS credentials" || echo -e "    ${DIM}○${NC} AWS credentials"
     $OPENAI_OK && echo -e "    ${GREEN}✓${NC} OpenAI API key" || echo -e "    ${DIM}○${NC} OpenAI API key"
     echo ""
-
-    # AWS
-    if ! $AWS_OK; then
-        echo -e "  ${BOLD}AWS Credentials${NC} ${DIM}(for Lightsail port management)${NC}"
-        echo ""
-        read -p "  Have AWS credentials? (y/n): " HAS_AWS
-        if [[ "$HAS_AWS" =~ ^[Yy] ]]; then
-            read -p "  Access Key ID: " AWS_KEY_ID
-            read -p "  Secret Access Key: " AWS_SECRET
-            read -p "  Region (e.g., eu-west-1): " AWS_REGION
-            if [ -n "$AWS_KEY_ID" ] && [ -n "$AWS_SECRET" ]; then
-                mkdir -p "$HOME/.aws"
-                cat > "$HOME/.aws/credentials" << EOF
-[default]
-aws_access_key_id = $AWS_KEY_ID
-aws_secret_access_key = $AWS_SECRET
-EOF
-                cat > "$HOME/.aws/config" << EOF
-[default]
-region = ${AWS_REGION:-us-east-1}
-output = json
-EOF
-                chmod 600 "$HOME/.aws/credentials"
-                echo_success "AWS credentials saved"
-            fi
-        fi
-        echo ""
-    fi
 
     # OpenAI
     if ! $OPENAI_OK; then
@@ -440,67 +408,6 @@ EOF
     echo -e "    ${GREEN}vibecode dashboard 8080${NC}  ${DIM}Start web dashboard${NC}"
     echo -e "    ${GREEN}cd ~/autocoder && claude${NC}  ${DIM}Start coding${NC}"
     echo ""
-}
-
-# =============================================================================
-# LIGHTSAIL COMMANDS
-# =============================================================================
-
-cmd_lightsail() {
-    SUBCMD="${1:-help}"
-
-    case "$SUBCMD" in
-        session|s)
-            PROJECT="${2:-default}"
-            SESSION="vibe-$PROJECT"
-            if tmux has-session -t "$SESSION" 2>/dev/null; then
-                tmux attach -t "$SESSION"
-            else
-                mkdir -p "$HOME/projects/$PROJECT"
-                tmux new-session -d -s "$SESSION" -n "claude" -c "$HOME/projects/$PROJECT"
-                tmux new-window -t "$SESSION" -n "shell" -c "$HOME/projects/$PROJECT"
-                tmux select-window -t "$SESSION:1"
-                tmux attach -t "$SESSION"
-            fi
-            ;;
-        list|ls)
-            echo "Active sessions:"
-            tmux list-sessions 2>/dev/null || echo "  (none)"
-            ;;
-        kill)
-            [ -z "$2" ] && { echo_error "Usage: vibecode lightsail kill <session>"; exit 1; }
-            tmux kill-session -t "$2" && echo_success "Killed: $2"
-            ;;
-        open-port|port)
-            PORT="${2:-}"
-            [ -z "$PORT" ] && { echo_error "Usage: vibecode lightsail open-port <port>"; exit 1; }
-
-            if ! aws sts get-caller-identity &>/dev/null; then
-                echo_error "AWS not configured. Run: vibecode setup"
-                exit 1
-            fi
-
-            INSTANCE_NAME="${LIGHTSAIL_INSTANCE:-$(aws lightsail get-instances --query 'instances[0].name' --output text 2>/dev/null)}"
-            [ -z "$INSTANCE_NAME" ] || [ "$INSTANCE_NAME" = "None" ] && { echo_error "No instance found"; exit 1; }
-
-            echo_step "Opening port $PORT on $INSTANCE_NAME..."
-            aws lightsail open-instance-public-ports \
-                --instance-name "$INSTANCE_NAME" \
-                --port-info "fromPort=$PORT,toPort=$PORT,protocol=tcp" && echo_success "Port $PORT opened"
-            ;;
-        ports)
-            INSTANCE_NAME="${LIGHTSAIL_INSTANCE:-$(aws lightsail get-instances --query 'instances[0].name' --output text 2>/dev/null)}"
-            aws lightsail get-instance-port-states --instance-name "$INSTANCE_NAME" --query 'portStates[*].[fromPort,protocol,state]' --output table
-            ;;
-        help|*)
-            echo "Lightsail commands:"
-            echo -e "  ${GREEN}vibecode lightsail session${NC} [name]  Start/attach tmux session"
-            echo -e "  ${GREEN}vibecode lightsail list${NC}           List sessions"
-            echo -e "  ${GREEN}vibecode lightsail kill${NC} <name>    Kill session"
-            echo -e "  ${GREEN}vibecode lightsail open-port${NC} N    Open firewall port"
-            echo -e "  ${GREEN}vibecode lightsail ports${NC}          List open ports"
-            ;;
-    esac
 }
 
 # =============================================================================
@@ -724,17 +631,6 @@ cmd_dashboard() {
 
     mkdir -p "$HOME/.claude/logs"
 
-    # Auto-open port if AWS configured
-    if aws sts get-caller-identity &>/dev/null 2>&1; then
-        INSTANCE=$(aws lightsail get-instances --query 'instances[0].name' --output text 2>/dev/null)
-        [ -n "$INSTANCE" ] && [ "$INSTANCE" != "None" ] && {
-            aws lightsail open-instance-public-ports \
-                --instance-name "$INSTANCE" \
-                --port-info "fromPort=$PORT,toPort=$PORT,protocol=tcp" 2>/dev/null && \
-                echo_success "Port $PORT opened on Lightsail"
-        }
-    fi
-
     echo_step "Starting dashboard on port $PORT..."
     python3 "$SCRIPT_DIR/dashboard/server.py" "$PORT"
 }
@@ -749,7 +645,7 @@ cmd_help() {
     echo ""
     echo -e "  ${BOLD}Getting Started:${NC}"
     echo -e "    ${GREEN}install${NC} [--server]        Install the full vibecoding stack"
-    echo -e "    ${GREEN}setup${NC}                     Configure credentials (AWS, OpenAI)"
+    echo -e "    ${GREEN}setup${NC}                     Configure credentials (OpenAI)"
     echo ""
     echo -e "  ${BOLD}Projects (isolated containers):${NC}"
     echo -e "    ${GREEN}init${NC}                      Install ClaudeBox for isolation"
@@ -760,9 +656,8 @@ cmd_help() {
     echo -e "    ${GREEN}status${NC} [name]             Show project status"
     echo -e "    ${GREEN}remove${NC} <name>             Delete project"
     echo ""
-    echo -e "  ${BOLD}Server/Mobile:${NC}"
+    echo -e "  ${BOLD}Server:${NC}"
     echo -e "    ${GREEN}dashboard${NC} [port]          Start web dashboard"
-    echo -e "    ${GREEN}lightsail${NC} <cmd>           Lightsail helpers (session, ports)"
     echo ""
     echo -e "  ${BOLD}Examples:${NC}"
     echo -e "    vibecode install --server        ${DIM}Full server setup${NC}"
@@ -790,7 +685,6 @@ case "$COMMAND" in
     list|ls)      cmd_list ;;
     status)       shift; cmd_status "$@" ;;
     remove|rm)    shift; cmd_remove "$@" ;;
-    lightsail)    shift; cmd_lightsail "$@" ;;
     dashboard)    shift; cmd_dashboard "$@" ;;
     help|--help|-h) cmd_help ;;
     -v|--version) echo "vibecode $VERSION" ;;

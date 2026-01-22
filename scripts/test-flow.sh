@@ -182,31 +182,31 @@ else
 fi
 
 # =============================================================================
-section "6. Lightsail/Mobile Setup"
+section "6. Quality Gates"
 # =============================================================================
 
-if [ -d "./lightsail" ]; then
-    test_pass "lightsail directory exists"
+if [ -f "./quality-gate.config.json" ]; then
+    test_pass "quality-gate.config.json exists"
 else
-    test_fail "lightsail directory missing"
+    test_fail "quality-gate.config.json missing"
 fi
 
-if [ -f "./lightsail/setup.sh" ]; then
-    test_pass "lightsail/setup.sh exists"
-    if [ -x "./lightsail/setup.sh" ]; then
-        test_pass "lightsail/setup.sh is executable"
+if [ -f "./hooks/pre-commit" ]; then
+    test_pass "pre-commit hook exists"
+    if [ -x "./hooks/pre-commit" ]; then
+        test_pass "pre-commit hook is executable"
     else
-        test_fail "lightsail/setup.sh not executable"
+        test_fail "pre-commit hook not executable"
     fi
 else
-    test_fail "lightsail/setup.sh missing"
+    test_fail "pre-commit hook missing"
 fi
 
-# Check if tmux is available (for Lightsail)
-if command -v tmux &>/dev/null; then
-    test_pass "tmux is installed"
+# Check if pre-commit is installed in .git/hooks
+if [ -f "./.git/hooks/pre-commit" ]; then
+    test_pass "pre-commit installed in .git/hooks"
 else
-    test_skip "tmux not installed (needed for Lightsail)"
+    test_skip "pre-commit not installed in .git/hooks (run: cp hooks/pre-commit .git/hooks/)"
 fi
 
 # =============================================================================
@@ -271,7 +271,7 @@ if [ $FAIL -eq 0 ]; then
     echo ""
     echo "Your stack is ready. Start coding:"
     echo ""
-    echo "  Lightsail:  vibe my-project && claude"
+    echo "  Server:     cd ~/autocoder && claude"
     echo "  ClaudeBox:  vibecode new my-project python && vibecode code my-project"
     echo ""
     exit 0

@@ -2,40 +2,33 @@
 
 Get coding in 3 steps.
 
-## Step 1: Clone & Setup
+## Step 1: Clone & Install
 
 ```bash
-# On your Lightsail instance (or any Linux server)
+# On your server
 git clone https://github.com/StreetsDigital/vibes.git
 cd vibes
 
-# Run interactive setup (configures AWS + OpenAI)
-./vibecode setup
+# Install everything
+./vibecode install --server
 ```
 
-The setup wizard will prompt you for:
-- **AWS credentials** (for auto-opening firewall ports)
-- **OpenAI API key** (for `/codex-review` bug detection)
-
-Don't have these yet? No problem - skip them and add later.
+The installer sets up:
+- Docker & dependencies
+- Claude Code CLI
+- MCP servers (vibecoding, atom-of-thoughts, sequential-thinking)
+- Quality gates & pre-commit hooks
 
 ---
 
 ## Step 2: Start Coding
 
 ```bash
-# Start a coding session
-vibe my-project
+# Switch to vibes user
+su - vibes
 
-# This creates 4 tmux windows:
-# 1. claude  - Main Claude Code session
-# 2. shell   - For running commands
-# 3. logs    - For watching logs
-# 4. scratch - For exploration
-```
-
-In the claude window:
-```bash
+# Start Claude in the autocoder directory
+cd ~/autocoder
 claude
 ```
 
@@ -64,9 +57,9 @@ Inside Claude Code, the workflow is:
 
 | Command | What it does |
 |---------|--------------|
-| `vibecode setup` | Interactive credential setup |
-| `vibecode dashboard 8498` | Start web dashboard |
-| `vibecode lightsail open-port 3000` | Open firewall port |
+| `vibecode install --server` | Full server installation |
+| `vibecode setup` | Configure OpenAI API key |
+| `vibecode dashboard 8080` | Start web dashboard |
 | `vibecode help` | Show all commands |
 
 ### Slash Commands (inside Claude)
@@ -78,41 +71,16 @@ Inside Claude Code, the workflow is:
 | `/codex-review` | Send code to OpenAI for bug analysis |
 | `/retrospective` | Extract learnings as reusable skills |
 
-### tmux Navigation
-
-| Keys | Action |
-|------|--------|
-| `Ctrl+a 1` | Go to claude window |
-| `Ctrl+a 2` | Go to shell window |
-| `Ctrl+a 3` | Go to logs window |
-| `Ctrl+a 4` | Go to scratch window |
-| `Ctrl+a d` | Detach (keeps session running) |
-
 ---
 
-## Credentials Setup
+## Optional: OpenAI Setup
 
-If you skipped setup, add credentials anytime:
+For `/codex-review` bug detection:
 
 ```bash
-# Re-run interactive setup
 ./vibecode setup
 
 # Or manually:
-
-# AWS (for port management)
-mkdir -p ~/.aws
-cat > ~/.aws/credentials << 'EOF'
-[default]
-aws_access_key_id = YOUR_KEY
-aws_secret_access_key = YOUR_SECRET
-EOF
-cat > ~/.aws/config << 'EOF'
-[default]
-region = eu-west-1
-EOF
-
-# OpenAI (for /codex-review)
 mkdir -p ~/.config/openai
 echo "sk-your-api-key" > ~/.config/openai/api_key
 ```
@@ -124,10 +92,8 @@ echo "sk-your-api-key" > ~/.config/openai/api_key
 Monitor activity in your browser:
 
 ```bash
-./vibecode dashboard 8498
+./vibecode dashboard 8080
 ```
-
-Opens `http://YOUR-IP:8498` automatically (if AWS configured).
 
 Features:
 - Real-time activity log
@@ -156,7 +122,6 @@ Features:
 ## Next Steps
 
 - **Full workflow details:** [CLAUDE.md](CLAUDE.md)
-- **Lightsail setup:** [lightsail/README.md](lightsail/README.md)
 - **Project isolation:** [CLAUDEBOX_INTEGRATION.md](CLAUDEBOX_INTEGRATION.md)
 
 ---

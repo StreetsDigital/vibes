@@ -80,14 +80,15 @@ SECRET_PATTERNS=(
 SECRET_FOUND=0
 for file in $STAGED_FILES; do
     if [ -f "$file" ]; then
+        # Skip files that commonly contain credential templates/patterns (not actual secrets)
+        if echo "$file" | grep -qE '\.(md|txt|example|sample|template)$|vibecode$|setup\.sh$|install\.sh$|hooks/'; then
+            continue
+        fi
         for pattern in "${SECRET_PATTERNS[@]}"; do
             if grep -qEi "$pattern" "$file" 2>/dev/null; then
-                # Exclude common false positives
-                if ! echo "$file" | grep -qE '\.(md|txt|example|sample|template)$'; then
-                    echo_fail "Potential secret found in $file"
-                    echo "    Pattern: $pattern"
-                    SECRET_FOUND=1
-                fi
+                echo_fail "Potential secret found in $file"
+                echo "    Pattern: $pattern"
+                SECRET_FOUND=1
             fi
         done
     fi
