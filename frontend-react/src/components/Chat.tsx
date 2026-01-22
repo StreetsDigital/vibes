@@ -12,9 +12,10 @@ interface ChatProps {
   onStop: () => void;
   onClear: () => void;
   onShowAddTask: () => void;
+  isVisible?: boolean;
 }
 
-export function Chat({ messages, loading, branch, onSend, onStop, onClear, onShowAddTask }: ChatProps) {
+export function Chat({ messages, loading, branch, onSend, onStop, onClear, onShowAddTask, isVisible }: ChatProps) {
   const [input, setInput] = useState('');
   const [showActionMenu, setShowActionMenu] = useState(false);
   const [showDebugLogs, setShowDebugLogs] = useState(false);
@@ -40,6 +41,13 @@ export function Chat({ messages, loading, branch, onSend, onStop, onClear, onSho
       messagesRef.current.scrollTop = messagesRef.current.scrollHeight;
     }
   }, [messages, debugLogs]);
+
+  // Scroll to bottom when tab becomes visible
+  useEffect(() => {
+    if (isVisible && messagesRef.current) {
+      messagesRef.current.scrollTop = messagesRef.current.scrollHeight;
+    }
+  }, [isVisible]);
 
   // Load debug logs
   const loadDebugLogs = async () => {

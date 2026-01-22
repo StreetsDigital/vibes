@@ -58,8 +58,8 @@ export function App() {
 
   return (
     <div className="bg-gray-900 text-gray-100 min-h-screen flex flex-col">
-      {/* Header */}
-      <header className="bg-gray-800 border-b border-gray-700 px-4 py-3 flex-shrink-0">
+      {/* Header - sticky on desktop */}
+      <header className="bg-gray-800 border-b border-gray-700 px-4 py-3 flex-shrink-0 md:sticky md:top-0 z-50">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <h1 className="text-lg font-bold text-blue-400">⚡</h1>
@@ -211,6 +211,7 @@ export function App() {
             onStop={chat.stopGeneration}
             onClear={chat.clearHistory}
             onShowAddTask={() => setCurrentView('board')}
+            isVisible={currentView === 'chat'}
           />
         </aside>
 
