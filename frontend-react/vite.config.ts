@@ -3,6 +3,7 @@ import preact from '@preact/preset-vite'
 
 export default defineConfig({
   plugins: [preact()],
+  base: './',  // Use relative paths for assets (works with /project/{id}/ routing)
   server: {
     port: 5173,
     proxy: {

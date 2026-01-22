@@ -316,6 +316,25 @@ def delete_project(project_id: str):
     return jsonify({"success": True})
 
 
+@app.route("/projects/<project_id>", methods=["PUT"])
+def update_project(project_id: str):
+    """Update a project's name or git_url."""
+    projects = load_projects()
+    if project_id not in projects:
+        return jsonify({"error": "Project not found"}), 404
+
+    data = request.json or {}
+    proj = projects[project_id]
+
+    if "name" in data:
+        proj["name"] = data["name"].strip()
+    if "git_url" in data:
+        proj["git_url"] = data["git_url"].strip()
+
+    save_projects(projects)
+    return jsonify({"success": True, "project": proj})
+
+
 @app.route("/projects/<project_id>/start", methods=["POST"])
 def start_project(project_id: str):
     """Start a project's container."""
@@ -427,28 +446,42 @@ def proxy_project(project_id: str, path: str):
             _create_container(project_id, proj["port"], Path(proj["path"]))
             time.sleep(2)
 
-    # Proxy the request to the container
+    # Proxy the request to the container with retry logic
     container_url = f"http://{container_name(project_id)}:3000/{path}"
 
-    try:
-        # Forward the request
-        resp = http_requests.request(
-            method=request.method,
-            url=container_url,
-            headers={k: v for k, v in request.headers if k.lower() != "host"},
-            data=request.get_data(),
-            params=request.args,
-            allow_redirects=False,
-            timeout=30,
-        )
+    # Retry up to 5 times with exponential backoff (total ~15 seconds max wait)
+    max_retries = 5
+    retry_delay = 1.0
+    last_error = None
 
-        # Build response
-        excluded_headers = ["content-encoding", "content-length", "transfer-encoding", "connection"]
-        headers = [(k, v) for k, v in resp.raw.headers.items() if k.lower() not in excluded_headers]
+    for attempt in range(max_retries):
+        try:
+            # Forward the request
+            resp = http_requests.request(
+                method=request.method,
+                url=container_url,
+                headers={k: v for k, v in request.headers if k.lower() != "host"},
+                data=request.get_data(),
+                params=request.args,
+                allow_redirects=False,
+                timeout=30,
+            )
 
-        return Response(resp.content, resp.status_code, headers)
-    except http_requests.exceptions.RequestException as e:
-        return jsonify({"error": f"Failed to connect to project: {str(e)}"}), 502
+            # Build response
+            excluded_headers = ["content-encoding", "content-length", "transfer-encoding", "connection"]
+            headers = [(k, v) for k, v in resp.raw.headers.items() if k.lower() not in excluded_headers]
+
+            return Response(resp.content, resp.status_code, headers)
+        except http_requests.exceptions.ConnectionError as e:
+            last_error = e
+            if attempt < max_retries - 1:
+                time.sleep(retry_delay)
+                retry_delay *= 1.5  # Exponential backoff
+            continue
+        except http_requests.exceptions.RequestException as e:
+            return jsonify({"error": f"Failed to connect to project: {str(e)}"}), 502
+
+    return jsonify({"error": f"Project container not ready after {max_retries} attempts: {str(last_error)}"}), 502
 
 
 # ===========================================

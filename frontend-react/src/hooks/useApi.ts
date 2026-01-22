@@ -407,6 +407,19 @@ export function useProjectManager() {
     window.open(`/project/${projectId}/`, '_blank');
   }, []);
 
+  const updateProject = useCallback(async (projectId: string, updates: { name?: string; git_url?: string }) => {
+    const response = await fetch(`/api/manager/projects/${projectId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updates),
+    });
+    const data = await response.json();
+    if (data.success) {
+      await loadProjects();
+    }
+    return data;
+  }, [loadProjects]);
+
   return {
     managedProjects,
     loading,
@@ -416,6 +429,7 @@ export function useProjectManager() {
     startProject,
     stopProject,
     openProject,
+    updateProject,
   };
 }
 

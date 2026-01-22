@@ -81,6 +81,7 @@ export function App() {
               onStartProject={projectManager.startProject}
               onStopProject={projectManager.stopProject}
               onDeleteProject={projectManager.deleteProject}
+              onUpdateProject={projectManager.updateProject}
             />
           </div>
           <div className="flex items-center gap-2">
@@ -284,18 +285,21 @@ function ProjectDropdown({
   onStartProject,
   onStopProject,
   onDeleteProject,
+  onUpdateProject,
 }: {
   projects: { name: string; path: string; current: boolean }[];
   currentProject: string;
-  managedProjects: { id: string; name: string; container_status: string }[];
+  managedProjects: { id: string; name: string; container_status: string; git_url?: string }[];
   onSwitch: (path: string) => void;
   onOpenManaged: (id: string) => void;
   onNewProject: () => void;
   onStartProject: (id: string) => void;
   onStopProject: (id: string) => void;
   onDeleteProject: (id: string) => void;
+  onUpdateProject: (id: string, updates: { name?: string; git_url?: string }) => void;
 }) {
   const [isOpen, setIsOpen] = useState(false);
+  const [editingProject, setEditingProject] = useState<{ id: string; name: string; git_url: string } | null>(null);
 
   return (
     <div className="relative">
@@ -391,6 +395,18 @@ function ProjectDropdown({
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
+                          setEditingProject({ id: proj.id, name: proj.name, git_url: proj.git_url || '' });
+                        }}
+                        className="p-1 text-gray-400 hover:bg-gray-400/20 rounded"
+                        title="Edit"
+                      >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                        </svg>
+                      </button>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
                           if (confirm(`Delete project "${proj.name}"?`)) {
                             onDeleteProject(proj.id);
                           }
@@ -422,6 +438,53 @@ function ProjectDropdown({
               </svg>
               New Isolated Project
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Project Modal */}
+      {editingProject && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setEditingProject(null)}>
+          <div className="bg-gray-800 rounded-lg p-4 w-80 max-w-[90vw]" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-lg font-medium mb-4">Edit Project</h3>
+            <div className="space-y-3">
+              <div>
+                <label className="block text-sm text-gray-400 mb-1">Name</label>
+                <input
+                  type="text"
+                  value={editingProject.name}
+                  onInput={(e) => setEditingProject({ ...editingProject, name: (e.target as HTMLInputElement).value })}
+                  className="w-full bg-gray-700 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+              <div>
+                <label className="block text-sm text-gray-400 mb-1">Git URL</label>
+                <input
+                  type="text"
+                  value={editingProject.git_url}
+                  onInput={(e) => setEditingProject({ ...editingProject, git_url: (e.target as HTMLInputElement).value })}
+                  className="w-full bg-gray-700 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  placeholder="https://github.com/..."
+                />
+              </div>
+              <div className="flex gap-2 pt-2">
+                <button
+                  onClick={() => setEditingProject(null)}
+                  className="flex-1 px-3 py-2 bg-gray-700 rounded text-sm hover:bg-gray-600"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => {
+                    onUpdateProject(editingProject.id, { name: editingProject.name, git_url: editingProject.git_url });
+                    setEditingProject(null);
+                  }}
+                  className="flex-1 px-3 py-2 bg-blue-600 rounded text-sm hover:bg-blue-500"
+                >
+                  Save
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

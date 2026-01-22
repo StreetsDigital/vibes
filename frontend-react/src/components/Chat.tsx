@@ -450,7 +450,7 @@ export function Chat({ messages, loading, branch, onSend, onStop, onClear, onSho
             Git status
           </button>
           <button
-            onClick={() => { onClear(); setShowActionMenu(false); }}
+            onClick={() => { onClear(); setShowAllMessages(false); setShowActionMenu(false); }}
             className="w-full text-left px-4 py-3 hover:bg-gray-700 rounded-lg text-red-400"
           >
             Clear chat history
