@@ -11,7 +11,11 @@ API:
   DELETE /projects/:id     - Delete project
   POST /projects/:id/start - Start project container
   POST /projects/:id/stop  - Stop project container
+  POST /projects/:id/activity - Update last activity (heartbeat)
   GET  /health/system      - System health metrics
+
+Features:
+  - Auto-sleep: Projects idle for 30 minutes are automatically stopped
 """
 
 import os
@@ -19,8 +23,10 @@ import json
 import subprocess
 import secrets
 import psutil
+import threading
+import time
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 from flask import Flask, request, jsonify
 import docker
 
@@ -32,12 +38,75 @@ NETWORK_NAME = os.environ.get("DOCKER_NETWORK", "vibes-network")
 BASE_PORT = int(os.environ.get("BASE_PORT", "3010"))
 MAX_PROJECTS = int(os.environ.get("MAX_PROJECTS", "10"))
 FRONTEND_IMAGE = os.environ.get("FRONTEND_IMAGE", "deploy-frontend:latest")
+IDLE_TIMEOUT_MINUTES = int(os.environ.get("IDLE_TIMEOUT_MINUTES", "30"))
 
 # Docker client
 docker_client = docker.from_env()
 
 # Projects database (file-based for simplicity)
 PROJECTS_DB = Path("/data/projects.json")
+
+# Activity tracking (in-memory, persisted to projects.json)
+# Format: {project_id: datetime}
+_activity_lock = threading.Lock()
+
+
+def update_activity(project_id: str):
+    """Update last activity timestamp for a project."""
+    projects = load_projects()
+    if project_id in projects:
+        projects[project_id]["last_activity"] = datetime.now().isoformat()
+        save_projects(projects)
+
+
+def get_idle_minutes(project: dict) -> int:
+    """Get minutes since last activity."""
+    last_activity = project.get("last_activity")
+    if not last_activity:
+        # Use created_at if no activity recorded
+        last_activity = project.get("created_at")
+    if not last_activity:
+        return 0
+    try:
+        last_dt = datetime.fromisoformat(last_activity)
+        delta = datetime.now() - last_dt
+        return int(delta.total_seconds() / 60)
+    except:
+        return 0
+
+
+def check_idle_projects():
+    """Check for idle projects and stop them."""
+    projects = load_projects()
+    for pid, proj in projects.items():
+        # Only check running containers
+        status = get_container_status(pid)
+        if status != "running":
+            continue
+
+        idle_mins = get_idle_minutes(proj)
+        if idle_mins >= IDLE_TIMEOUT_MINUTES:
+            print(f"[idle-monitor] Stopping idle project {pid} ({proj.get('name')}) - idle for {idle_mins} minutes")
+            try:
+                container = docker_client.containers.get(container_name(pid))
+                container.stop()
+                # Record that it was auto-stopped
+                projects[pid]["auto_stopped"] = datetime.now().isoformat()
+                projects[pid]["auto_stopped_reason"] = f"Idle for {idle_mins} minutes"
+                save_projects(projects)
+            except Exception as e:
+                print(f"[idle-monitor] Error stopping {pid}: {e}")
+
+
+def idle_monitor_loop():
+    """Background thread that checks for idle projects every minute."""
+    print(f"[idle-monitor] Started - timeout: {IDLE_TIMEOUT_MINUTES} minutes")
+    while True:
+        time.sleep(60)  # Check every minute
+        try:
+            check_idle_projects()
+        except Exception as e:
+            print(f"[idle-monitor] Error: {e}")
 
 
 def load_projects() -> dict:
@@ -97,6 +166,8 @@ def list_projects():
     for pid, proj in projects.items():
         proj["id"] = pid
         proj["container_status"] = get_container_status(pid)
+        proj["idle_minutes"] = get_idle_minutes(proj)
+        proj["idle_timeout_minutes"] = IDLE_TIMEOUT_MINUTES
         result.append(proj)
     return jsonify({"projects": result})
 
@@ -251,13 +322,19 @@ def start_project(project_id: str):
     if project_id not in projects:
         return jsonify({"error": "Project not found"}), 404
 
+    # Clear auto-stopped flag and update activity
+    proj = projects[project_id]
+    proj.pop("auto_stopped", None)
+    proj.pop("auto_stopped_reason", None)
+    proj["last_activity"] = datetime.now().isoformat()
+    save_projects(projects)
+
     try:
         container = docker_client.containers.get(container_name(project_id))
         container.start()
         return jsonify({"success": True, "status": "running"})
     except docker.errors.NotFound:
         # Recreate container
-        proj = projects[project_id]
         _create_container(project_id, proj["port"], Path(proj["path"]))
         return jsonify({"success": True, "status": "created"})
 
@@ -275,6 +352,50 @@ def stop_project(project_id: str):
         return jsonify({"success": True, "status": "stopped"})
     except docker.errors.NotFound:
         return jsonify({"success": True, "status": "not_running"})
+
+
+@app.route("/projects/<project_id>/activity", methods=["POST"])
+def record_activity(project_id: str):
+    """Record activity heartbeat for a project (resets idle timer)."""
+    projects = load_projects()
+    if project_id not in projects:
+        return jsonify({"error": "Project not found"}), 404
+
+    # Update activity timestamp
+    update_activity(project_id)
+
+    # If container was auto-stopped, restart it
+    status = get_container_status(project_id)
+    proj = projects[project_id]
+    was_auto_stopped = proj.get("auto_stopped")
+
+    if status != "running" and was_auto_stopped:
+        # Clear auto-stopped flag and restart
+        proj.pop("auto_stopped", None)
+        proj.pop("auto_stopped_reason", None)
+        save_projects(projects)
+        try:
+            container = docker_client.containers.get(container_name(project_id))
+            container.start()
+            return jsonify({
+                "success": True,
+                "status": "restarted",
+                "message": "Project was idle-stopped, now restarted"
+            })
+        except docker.errors.NotFound:
+            _create_container(project_id, proj["port"], Path(proj["path"]))
+            return jsonify({
+                "success": True,
+                "status": "recreated",
+                "message": "Project container recreated"
+            })
+
+    return jsonify({
+        "success": True,
+        "status": status,
+        "idle_minutes": get_idle_minutes(proj),
+        "timeout_minutes": IDLE_TIMEOUT_MINUTES
+    })
 
 
 # ===========================================
@@ -377,4 +498,9 @@ def system_health():
 if __name__ == "__main__":
     port = int(os.environ.get("MANAGER_PORT", "3009"))
     print(f"[project-manager] Starting on port {port}")
-    app.run(host="0.0.0.0", port=port, debug=True)
+
+    # Start idle monitor background thread
+    idle_thread = threading.Thread(target=idle_monitor_loop, daemon=True)
+    idle_thread.start()
+
+    app.run(host="0.0.0.0", port=port, debug=False)  # debug=False for threading
