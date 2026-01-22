@@ -4,7 +4,18 @@ import type {
   McpServer, Skill, Tool, Hook, AgentData, LogEntry
 } from '../types';
 
-const API_BASE = '/api';
+// Detect if we're in a project context (e.g., /project/abc123/)
+// and adjust API base path accordingly
+function getApiBase(): string {
+  const path = window.location.pathname;
+  const projectMatch = path.match(/^\/project\/([^/]+)/);
+  if (projectMatch) {
+    return `/project/${projectMatch[1]}/api`;
+  }
+  return '/api';
+}
+
+const API_BASE = getApiBase();
 
 // Generic fetch wrapper
 async function apiFetch<T>(url: string, options?: RequestInit): Promise<T> {
