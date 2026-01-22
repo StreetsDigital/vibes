@@ -28,7 +28,7 @@
     
     "types": {
       "enabled": true,
-      "required": false,
+      "required": true,
       "commands": {
         "node": "npx tsc --noEmit",
         "python": "mypy . --ignore-missing-imports",
@@ -54,7 +54,7 @@
     
     "security": {
       "enabled": true,
-      "required": false,
+      "required": true,
       "blockOnHigh": true,
       "commands": {
         "node": "npm audit --audit-level=high",
@@ -92,7 +92,7 @@
     "preCommit": {
       "enabled": true,
       "checks": ["format", "lint", "types"],
-      "blockOnFailure": false
+      "blockOnFailure": true
     },
     "prePush": {
       "enabled": true,

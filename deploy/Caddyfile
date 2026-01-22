@@ -17,6 +17,11 @@
 
 # Main domain - Vibes Frontend (Kanban + Claude Chat)
 {$DOMAIN:localhost} {
+	# Basic auth - username: vibes
+	basic_auth {
+		vibes $2a$14$1n9XrsRS7elpvdW6NGOB4uBlYMBgiXLNRHhEw.QkvP6YZ2fxbj2Cy
+	}
+
 	# Project manager API
 	handle /api/manager/* {
 		uri strip_prefix /api/manager
@@ -52,6 +57,10 @@
 
 # Dashboard subdomain
 dash.{$DOMAIN:localhost} {
+	basic_auth {
+		vibes $2a$14$1n9XrsRS7elpvdW6NGOB4uBlYMBgiXLNRHhEw.QkvP6YZ2fxbj2Cy
+	}
+
 	reverse_proxy dashboard:8080
 
 	header {
@@ -71,7 +80,7 @@ api.{$DOMAIN:localhost} {
 # Ollama API (if enabled)
 ollama.{$DOMAIN:localhost} {
 	# Basic auth for Ollama access
-	basicauth {
+	basic_auth {
 		{$OLLAMA_USER:admin} {$OLLAMA_HASH:JDJhJDE0JDdQa3lQWnFQTnFQTnFQTnFQTnFQTnFQTnFQTnFQTnFQTnFQTnFQTnFQTnFQTnFQTnFQ}
 	}
 
