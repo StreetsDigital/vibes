@@ -105,6 +105,7 @@ services:
     volumes:
       - projects:/projects
       - claude_credentials:/home/vibes/.claude
+      - /root/.claude:/root/.claude:ro
     networks:
       - vibes-network
     expose:

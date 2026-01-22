@@ -41,6 +41,9 @@ from realtime import (
 from task_progress import (
     TaskProgressTracker, TaskStage, detect_stage_from_output, generate_auto_retro
 )
+from task_decomposer import (
+    decompose_task, quick_decompose, estimate_task_size, Subtask, format_subtasks_as_markdown
+)
 
 # Global progress tracker
 def emit_progress(data):
@@ -336,6 +339,143 @@ def delete_task(task_id):
     broadcast_board_update()
 
     return jsonify(result)
+
+
+@app.route('/api/task/<task_id>/decompose', methods=['POST'])
+@requires_auth
+def decompose_existing_task(task_id):
+    """Decompose an existing task into subtasks."""
+    if not _bead_store or not _project_dir:
+        return jsonify({"error": "Not initialized"}), 500
+
+    bead = _bead_store.load(task_id)
+    if not bead:
+        return jsonify({"error": "Task not found"}), 404
+
+    data = request.json or {}
+    context = data.get("context", "")
+
+    # Check if task is too small to decompose
+    size = estimate_task_size(bead.description or bead.name)
+    if size == 'atomic' and not data.get("force"):
+        return jsonify({
+            "success": False,
+            "reason": "Task appears atomic - doesn't need decomposition",
+            "size": size
+        })
+
+    # Decompose using Claude
+    subtasks = decompose_task(
+        task_name=bead.name,
+        task_description=bead.description or "",
+        context=context,
+        project_dir=str(_project_dir)
+    )
+
+    if not subtasks:
+        # Fallback to quick decomposition
+        quick_tasks = quick_decompose(bead.description or bead.name)
+        return jsonify({
+            "success": True,
+            "method": "quick",
+            "subtasks": quick_tasks,
+            "parent_task_id": task_id
+        })
+
+    # Create subtasks as new beads
+    created_beads = []
+    for subtask in subtasks:
+        new_bead = _mayor.create_bead(
+            name=f"[{bead.name[:20]}] {subtask.name}",
+            description=f"{subtask.description}\n\n**Acceptance Criteria:**\n" +
+                       "\n".join(f"- {c}" for c in subtask.acceptance_criteria),
+            test_cases=subtask.test_cases,
+            priority=bead.priority
+        )
+        created_beads.append({
+            "id": new_bead.id,
+            "name": new_bead.name,
+            "order": subtask.order
+        })
+
+    # Mark original task as decomposed (move to done or delete based on preference)
+    bead.description = f"**DECOMPOSED** into {len(created_beads)} subtasks\n\n" + (bead.description or "")
+    _bead_store.save(bead, f"Decomposed: {bead.name}")
+
+    # Broadcast update
+    broadcast_board_update()
+
+    return jsonify({
+        "success": True,
+        "method": "claude",
+        "subtasks": [s.to_dict() for s in subtasks],
+        "created_beads": created_beads,
+        "parent_task_id": task_id
+    })
+
+
+@app.route('/api/decompose', methods=['POST'])
+@requires_auth
+def decompose_new_task():
+    """Decompose a task description into subtasks without creating beads."""
+    if not _project_dir:
+        return jsonify({"error": "Not initialized"}), 500
+
+    data = request.json
+    task_name = data.get("name", "")
+    task_description = data.get("description", "")
+    context = data.get("context", "")
+    create_beads = data.get("create_beads", False)
+
+    if not task_name and not task_description:
+        return jsonify({"error": "Task name or description required"}), 400
+
+    # Check task size
+    size = estimate_task_size(task_description or task_name)
+
+    # Decompose
+    subtasks = decompose_task(
+        task_name=task_name or "Unnamed Task",
+        task_description=task_description,
+        context=context,
+        project_dir=str(_project_dir)
+    )
+
+    if not subtasks:
+        quick_tasks = quick_decompose(task_description or task_name)
+        return jsonify({
+            "success": True,
+            "method": "quick",
+            "size": size,
+            "subtasks": quick_tasks
+        })
+
+    # Optionally create beads
+    created_beads = []
+    if create_beads and _mayor:
+        for subtask in subtasks:
+            new_bead = _mayor.create_bead(
+                name=subtask.name,
+                description=f"{subtask.description}\n\n**Acceptance Criteria:**\n" +
+                           "\n".join(f"- {c}" for c in subtask.acceptance_criteria),
+                test_cases=subtask.test_cases,
+                priority=0
+            )
+            created_beads.append({
+                "id": new_bead.id,
+                "name": new_bead.name,
+                "order": subtask.order
+            })
+        broadcast_board_update()
+
+    return jsonify({
+        "success": True,
+        "method": "claude",
+        "size": size,
+        "subtasks": [s.to_dict() for s in subtasks],
+        "created_beads": created_beads if create_beads else None,
+        "markdown": format_subtasks_as_markdown(subtasks)
+    })
 
 
 @app.route('/api/autowork', methods=['POST'])
@@ -1029,11 +1169,16 @@ def run_autonomous_claude(parallel_agents: int = 1):
 
 def get_claude_settings_paths() -> dict:
     """Get paths to Claude settings files."""
-    home = Path.home()
+    # Use /home/vibes for the vibes user's Claude config (not root)
+    vibes_home = Path("/home/vibes")
+    root_home = Path("/root")
     return {
-        "global": home / ".claude" / "settings.json",
+        "global": vibes_home / ".claude" / "settings.json",
+        "global_root": root_home / ".claude" / "settings.json",
+        "mcp_servers": vibes_home / ".claude" / "mcp_servers.json",
+        "mcp_servers_root": root_home / ".claude" / "mcp_servers.json",
         "project": _project_dir / ".claude" / "settings.json" if _project_dir else None,
-        "skills_global": home / ".claude" / "skills",
+        "skills_global": vibes_home / ".claude" / "skills",
         "skills_project": _project_dir / ".claude" / "skills" if _project_dir else None,
     }
 
@@ -1059,34 +1204,69 @@ def save_claude_settings(settings: dict, scope: str = "global"):
         path.write_text(json.dumps(settings, indent=2))
 
 
+def load_mcp_servers_file() -> dict:
+    """Load MCP servers from the dedicated mcp_servers.json file."""
+    paths = get_claude_settings_paths()
+
+    # Try vibes user first, then root
+    for key in ["mcp_servers", "mcp_servers_root"]:
+        path = paths.get(key)
+        if path and path.exists():
+            try:
+                data = json.loads(path.read_text())
+                return data.get("mcpServers", {})
+            except:
+                pass
+    return {}
+
+
 @app.route('/api/claude/mcp')
 @requires_auth
 def get_mcp_servers():
     """Get configured MCP servers."""
     global_settings = load_claude_settings("global")
     project_settings = load_claude_settings("project")
+    mcp_file_servers = load_mcp_servers_file()
 
     servers = []
+    seen_names = set()
 
-    # Global MCP servers
+    # MCP servers from dedicated mcp_servers.json (Claude Code's actual config)
+    for name, config in mcp_file_servers.items():
+        if name not in seen_names:
+            servers.append({
+                "name": name,
+                "scope": "global",
+                "command": config.get("command", ""),
+                "args": config.get("args", []),
+                "description": config.get("description", ""),
+                "enabled": not config.get("disabled", False)
+            })
+            seen_names.add(name)
+
+    # Global MCP servers from settings.json
     for name, config in global_settings.get("mcpServers", {}).items():
-        servers.append({
-            "name": name,
-            "scope": "global",
-            "command": config.get("command", ""),
-            "args": config.get("args", []),
-            "enabled": not config.get("disabled", False)
-        })
+        if name not in seen_names:
+            servers.append({
+                "name": name,
+                "scope": "global",
+                "command": config.get("command", ""),
+                "args": config.get("args", []),
+                "enabled": not config.get("disabled", False)
+            })
+            seen_names.add(name)
 
     # Project MCP servers
     for name, config in project_settings.get("mcpServers", {}).items():
-        servers.append({
-            "name": name,
-            "scope": "project",
-            "command": config.get("command", ""),
-            "args": config.get("args", []),
-            "enabled": not config.get("disabled", False)
-        })
+        if name not in seen_names:
+            servers.append({
+                "name": name,
+                "scope": "project",
+                "command": config.get("command", ""),
+                "args": config.get("args", []),
+                "enabled": not config.get("disabled", False)
+            })
+            seen_names.add(name)
 
     return jsonify({"servers": servers})
 
