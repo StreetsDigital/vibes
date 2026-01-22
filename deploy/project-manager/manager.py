@@ -27,8 +27,9 @@ import threading
 import time
 from pathlib import Path
 from datetime import datetime, timedelta
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, Response
 import docker
+import requests as http_requests
 
 app = Flask(__name__)
 
@@ -399,10 +400,62 @@ def record_activity(project_id: str):
 
 
 # ===========================================
+# Project Proxy
+# ===========================================
+
+@app.route("/project/<project_id>/", defaults={"path": ""})
+@app.route("/project/<project_id>/<path:path>")
+def proxy_project(project_id: str, path: str):
+    """Proxy requests to project containers."""
+    projects = load_projects()
+    if project_id not in projects:
+        return jsonify({"error": "Project not found"}), 404
+
+    # Record activity
+    update_activity(project_id)
+
+    # Get container status, start if needed
+    status = get_container_status(project_id)
+    if status != "running":
+        proj = projects[project_id]
+        try:
+            container = docker_client.containers.get(container_name(project_id))
+            container.start()
+            # Wait a moment for container to be ready
+            time.sleep(1)
+        except docker.errors.NotFound:
+            _create_container(project_id, proj["port"], Path(proj["path"]))
+            time.sleep(2)
+
+    # Proxy the request to the container
+    container_url = f"http://{container_name(project_id)}:3000/{path}"
+
+    try:
+        # Forward the request
+        resp = http_requests.request(
+            method=request.method,
+            url=container_url,
+            headers={k: v for k, v in request.headers if k.lower() != "host"},
+            data=request.get_data(),
+            params=request.args,
+            allow_redirects=False,
+            timeout=30,
+        )
+
+        # Build response
+        excluded_headers = ["content-encoding", "content-length", "transfer-encoding", "connection"]
+        headers = [(k, v) for k, v in resp.raw.headers.items() if k.lower() not in excluded_headers]
+
+        return Response(resp.content, resp.status_code, headers)
+    except http_requests.exceptions.RequestException as e:
+        return jsonify({"error": f"Failed to connect to project: {str(e)}"}), 502
+
+
+# ===========================================
 # System Health API
 # ===========================================
 
-@app.route("/api/manager/health/system", methods=["GET"])
+@app.route("/health/system", methods=["GET"])
 def system_health():
     """Get system health metrics."""
     try:
@@ -430,10 +483,14 @@ def system_health():
         # Container details
         container_list = []
         for c in vibes_containers:
+            try:
+                image_name = c.image.tags[0] if c.image.tags else "unknown"
+            except Exception:
+                image_name = "unknown"
             container_list.append({
                 "name": c.name,
                 "status": c.status,
-                "image": c.image.tags[0] if c.image.tags else "unknown",
+                "image": image_name,
             })
 
         # Load average (Unix only)

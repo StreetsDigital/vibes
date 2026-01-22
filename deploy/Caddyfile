@@ -28,14 +28,9 @@
 		reverse_proxy project-manager:3009
 	}
 
-	# Dynamic project routing (vibes-project-{id} containers)
+	# Dynamic project routing - proxy through project-manager
 	handle /project/* {
-		uri strip_prefix /project
-		# Extract project ID and route to its container
-		# Projects run on ports 3010-3019
-		reverse_proxy vibes-project-*:3000 {
-			lb_policy first
-		}
+		reverse_proxy project-manager:3009
 	}
 
 	# Frontend app (default project)

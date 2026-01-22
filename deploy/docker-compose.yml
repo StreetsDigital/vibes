@@ -237,6 +237,7 @@ services:
 # ===========================================
 networks:
   vibes-network:
+    name: vibes-network
     driver: bridge
 
 # ===========================================

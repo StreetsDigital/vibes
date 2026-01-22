@@ -78,6 +78,9 @@ export function App() {
               }}
               onOpenManaged={projectManager.openProject}
               onNewProject={() => setShowNewProjectModal(true)}
+              onStartProject={projectManager.startProject}
+              onStopProject={projectManager.stopProject}
+              onDeleteProject={projectManager.deleteProject}
             />
           </div>
           <div className="flex items-center gap-2">
@@ -278,6 +281,9 @@ function ProjectDropdown({
   onSwitch,
   onOpenManaged,
   onNewProject,
+  onStartProject,
+  onStopProject,
+  onDeleteProject,
 }: {
   projects: { name: string; path: string; current: boolean }[];
   currentProject: string;
@@ -285,6 +291,9 @@ function ProjectDropdown({
   onSwitch: (path: string) => void;
   onOpenManaged: (id: string) => void;
   onNewProject: () => void;
+  onStartProject: (id: string) => void;
+  onStopProject: (id: string) => void;
+  onDeleteProject: (id: string) => void;
 }) {
   const [isOpen, setIsOpen] = useState(false);
 
@@ -326,23 +335,75 @@ function ProjectDropdown({
                 <div className="border-t border-gray-700 my-1"></div>
                 <div className="px-3 py-1 text-xs text-gray-500 uppercase">Isolated Projects</div>
                 {managedProjects.map((proj) => (
-                  <button
+                  <div
                     key={proj.id}
-                    onClick={() => {
-                      onOpenManaged(proj.id);
-                      setIsOpen(false);
-                    }}
-                    className="w-full text-left px-3 py-2 hover:bg-gray-700 text-sm flex items-center justify-between"
+                    className="px-3 py-2 hover:bg-gray-700 text-sm"
                   >
-                    <span>{proj.name}</span>
-                    <span className={`text-xs px-1.5 py-0.5 rounded ${
-                      proj.container_status === 'running'
-                        ? 'bg-green-600/20 text-green-400'
-                        : 'bg-gray-600/20 text-gray-400'
-                    }`}>
-                      {proj.container_status}
-                    </span>
-                  </button>
+                    <div className="flex items-center justify-between mb-1">
+                      <button
+                        onClick={() => {
+                          onOpenManaged(proj.id);
+                          setIsOpen(false);
+                        }}
+                        className="text-left flex-1 truncate hover:text-blue-400"
+                      >
+                        {proj.name}
+                      </button>
+                      <span className={`text-xs px-1.5 py-0.5 rounded ${
+                        proj.container_status === 'running'
+                          ? 'bg-green-600/20 text-green-400'
+                          : 'bg-gray-600/20 text-gray-400'
+                      }`}>
+                        {proj.container_status}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      {proj.container_status === 'running' ? (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); onStopProject(proj.id); }}
+                          className="p-1 text-yellow-400 hover:bg-yellow-400/20 rounded"
+                          title="Stop"
+                        >
+                          <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                            <path d="M6 4h4v16H6V4zm8 0h4v16h-4V4z"/>
+                          </svg>
+                        </button>
+                      ) : (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); onStartProject(proj.id); }}
+                          className="p-1 text-green-400 hover:bg-green-400/20 rounded"
+                          title="Start"
+                        >
+                          <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                            <path d="M8 5v14l11-7z"/>
+                          </svg>
+                        </button>
+                      )}
+                      <button
+                        onClick={(e) => { e.stopPropagation(); onOpenManaged(proj.id); }}
+                        className="p-1 text-blue-400 hover:bg-blue-400/20 rounded"
+                        title="Open"
+                      >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                        </svg>
+                      </button>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (confirm(`Delete project "${proj.name}"?`)) {
+                            onDeleteProject(proj.id);
+                          }
+                        }}
+                        className="p-1 text-red-400 hover:bg-red-400/20 rounded"
+                        title="Delete"
+                      >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                        </svg>
+                      </button>
+                    </div>
+                  </div>
                 ))}
               </>
             )}
