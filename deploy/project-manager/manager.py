@@ -113,7 +113,12 @@ def idle_monitor_loop():
 def load_projects() -> dict:
     """Load projects from database file."""
     if PROJECTS_DB.exists():
-        return json.loads(PROJECTS_DB.read_text())
+        try:
+            content = PROJECTS_DB.read_text()
+            if content.strip():
+                return json.loads(content)
+        except (json.JSONDecodeError, IOError) as e:
+            print(f"[load_projects] Error reading projects.json: {e}")
     return {}
 
 
@@ -198,8 +203,18 @@ def create_project():
 
         # Clone repo or init empty
         if git_url:
+            clone_url = git_url
+
+            # Convert HTTPS GitHub URLs to SSH for private repo support
+            if "github.com" in git_url and git_url.startswith("https://"):
+                # https://github.com/user/repo.git -> git@github.com:user/repo.git
+                clone_url = git_url.replace("https://github.com/", "git@github.com:")
+                if not clone_url.endswith(".git"):
+                    clone_url += ".git"
+                print(f"[create_project] Converted to SSH: {clone_url}")
+
             subprocess.run(
-                ["git", "clone", git_url, str(project_dir)],
+                ["git", "clone", clone_url, str(project_dir)],
                 check=True, capture_output=True
             )
         else:

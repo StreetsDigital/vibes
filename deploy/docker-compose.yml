@@ -157,10 +157,12 @@ services:
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       - GITHUB_TOKEN=${GITHUB_TOKEN:-}
       - GROQ_API_KEY=${GROQ_API_KEY:-}
+      - GIT_SSH_COMMAND=ssh -i /root/.ssh/github_streetsdigital -o StrictHostKeyChecking=no
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - /home/vibes/projects:/home/vibes/projects
       - manager_data:/data
+      - /root/.ssh:/root/.ssh:ro
     networks:
       - vibes-network
     expose:
