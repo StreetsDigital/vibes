@@ -1,5 +1,14 @@
 {
   "mcpServers": {
+    "context7": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@upstash/context7-mcp"
+      ],
+      "description": "Up-to-date library documentation for LLMs (use context7 in prompts)",
+      "env": {}
+    },
     "atom-of-thoughts": {
       "command": "npx",
       "args": [
