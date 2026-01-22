@@ -41,6 +41,50 @@ case "$1" in
         echo -e "${GREEN}Vibes restarted!${NC}"
         ;;
 
+    rebuild)
+        echo -e "${YELLOW}Rebuilding and restarting Vibes stack...${NC}"
+        echo ""
+        echo -e "${YELLOW}[1/3] Rebuilding images...${NC}"
+        docker compose build
+        echo ""
+        echo -e "${YELLOW}[2/3] Restarting core services...${NC}"
+        docker compose up -d
+        echo ""
+        PROJECT_COUNT=$(count_projects)
+        if [ "$PROJECT_COUNT" -gt 0 ]; then
+            echo -e "${YELLOW}[3/3] Updating $PROJECT_COUNT project container(s)...${NC}"
+            for container in $(get_project_containers | cut -f1); do
+                project_id="${container#vibes-project-}"
+                echo "  Recreating $container..."
+                docker stop "$container" 2>/dev/null || true
+                docker rm "$container" 2>/dev/null || true
+                # Start via project-manager to recreate with new image
+                curl -s -X POST "http://localhost:3009/projects/$project_id/start" > /dev/null 2>&1 || true
+            done
+        else
+            echo -e "${YELLOW}[3/3] No project containers to update.${NC}"
+        fi
+        echo ""
+        echo -e "${GREEN}Vibes rebuilt and running!${NC}"
+        ;;
+
+    update-projects)
+        PROJECT_COUNT=$(count_projects)
+        if [ "$PROJECT_COUNT" -eq 0 ]; then
+            echo "No project containers to update."
+            exit 0
+        fi
+        echo -e "${YELLOW}Updating $PROJECT_COUNT project container(s) with latest image...${NC}"
+        for container in $(get_project_containers | cut -f1); do
+            project_id="${container#vibes-project-}"
+            echo "  Recreating $container..."
+            docker stop "$container" 2>/dev/null || true
+            docker rm "$container" 2>/dev/null || true
+            curl -s -X POST "http://localhost:3009/projects/$project_id/start" > /dev/null 2>&1 || true
+        done
+        echo -e "${GREEN}Project containers updated!${NC}"
+        ;;
+
     down)
         PROJECT_COUNT=$(count_projects)
         if [ "$PROJECT_COUNT" -gt 0 ]; then
@@ -136,13 +180,15 @@ case "$1" in
         echo "Usage: $0 <command>"
         echo ""
         echo "Commands:"
-        echo "  start           Start the Vibes stack"
-        echo "  stop            Stop core services (preserve projects)"
-        echo "  restart         Restart all services"
-        echo "  down            Take down stack (with project protection)"
-        echo "  status          Show stack and project status"
-        echo "  projects        List project containers"
-        echo "  clean-projects  Remove all project containers"
+        echo "  start            Start the Vibes stack"
+        echo "  stop             Stop core services (preserve projects)"
+        echo "  restart          Restart all services"
+        echo "  rebuild          Rebuild images + restart + update projects"
+        echo "  down             Take down stack (with project protection)"
+        echo "  status           Show stack and project status"
+        echo "  projects         List project containers"
+        echo "  update-projects  Recreate projects with latest image"
+        echo "  clean-projects   Remove all project containers"
         echo ""
         ;;
 esac
