@@ -262,6 +262,30 @@ cmd_install() {
 EOFCFG"
     echo_success "MCP servers configured"
 
+    # Commands and skills
+    echo_step "Installing commands and skills..."
+    run_as_user "mkdir -p \"$CLAUDE_CONFIG_DIR/commands\" \"$CLAUDE_CONFIG_DIR/skills/learned\""
+
+    # Copy commands if they exist
+    if [ -d "$SCRIPT_DIR/.claude/commands" ]; then
+        for cmd in "$SCRIPT_DIR/.claude/commands/"*; do
+            [ -f "$cmd" ] && run_as_user "cp \"$cmd\" \"$CLAUDE_CONFIG_DIR/commands/\""
+        done
+    fi
+    echo_success "Commands installed (/commit, /verify, /retrospective)"
+
+    # Quality gate config
+    if [ -f "$SCRIPT_DIR/quality-gate.config.json" ]; then
+        run_as_user "cp \"$SCRIPT_DIR/quality-gate.config.json\" \"$AUTOCODER_DIR/\""
+    fi
+
+    # Pre-commit hook
+    if [ -f "$SCRIPT_DIR/hooks/pre-commit" ]; then
+        run_as_user "mkdir -p \"$AUTOCODER_DIR/hooks\""
+        run_as_user "cp \"$SCRIPT_DIR/hooks/pre-commit\" \"$AUTOCODER_DIR/hooks/\""
+    fi
+    echo_success "Quality gates configured"
+
     # =========================================================================
     # Server-specific setup
     # =========================================================================
@@ -544,13 +568,54 @@ EOF
     chmod +x "$CLAUDEBOX_HOME/$PROJECT_NAME/.install-vibecoding.sh"
     claudebox exec "$PROJECT_NAME" /workspace/.install-vibecoding.sh
 
+    # Copy all Claude configuration
+    PROJ_CLAUDE="$CLAUDEBOX_HOME/$PROJECT_NAME/workspace/.claude"
+    mkdir -p "$PROJ_CLAUDE/commands" "$PROJ_CLAUDE/skills/learned"
+
+    echo_step "Copying configuration..."
+
+    # Settings
     [ -f "$SCRIPT_DIR/.claude/settings.json" ] && {
-        mkdir -p "$CLAUDEBOX_HOME/$PROJECT_NAME/workspace/.claude"
-        cp "$SCRIPT_DIR/.claude/settings.json" "$CLAUDEBOX_HOME/$PROJECT_NAME/workspace/.claude/"
+        cp "$SCRIPT_DIR/.claude/settings.json" "$PROJ_CLAUDE/"
     }
+
+    # MCP Servers
+    [ -f "$SCRIPT_DIR/.claude/mcp_servers.json" ] && {
+        cp "$SCRIPT_DIR/.claude/mcp_servers.json" "$PROJ_CLAUDE/"
+    }
+
+    # Commands (skills like /commit, /verify, etc.)
+    [ -d "$SCRIPT_DIR/.claude/commands" ] && {
+        cp -r "$SCRIPT_DIR/.claude/commands/"* "$PROJ_CLAUDE/commands/" 2>/dev/null || true
+    }
+
+    # Quality gate config
+    [ -f "$SCRIPT_DIR/quality-gate.config.json" ] && {
+        cp "$SCRIPT_DIR/quality-gate.config.json" "$CLAUDEBOX_HOME/$PROJECT_NAME/workspace/"
+    }
+
+    # Pre-commit hook
+    [ -f "$SCRIPT_DIR/hooks/pre-commit" ] && {
+        mkdir -p "$CLAUDEBOX_HOME/$PROJECT_NAME/workspace/hooks"
+        cp "$SCRIPT_DIR/hooks/pre-commit" "$CLAUDEBOX_HOME/$PROJECT_NAME/workspace/hooks/"
+    }
+
+    # MCP Server files
+    [ -d "$SCRIPT_DIR/mcp_server" ] && {
+        mkdir -p "$CLAUDEBOX_HOME/$PROJECT_NAME/workspace/mcp_server"
+        cp "$SCRIPT_DIR/mcp_server/"*.py "$CLAUDEBOX_HOME/$PROJECT_NAME/workspace/mcp_server/" 2>/dev/null || true
+    }
+
+    echo_success "Configuration copied"
 
     echo ""
     echo_success "Project ready!"
+    echo ""
+    echo -e "  ${BOLD}Included:${NC}"
+    echo -e "    ${GREEN}✓${NC} MCP Servers (vibecoding, atom-of-thoughts, sequential-thinking)"
+    echo -e "    ${GREEN}✓${NC} Commands (/commit, /verify, /retrospective)"
+    echo -e "    ${GREEN}✓${NC} Quality Gates (pre-commit hooks)"
+    echo -e "    ${GREEN}✓${NC} Planning Skill"
     echo ""
     echo -e "  ${GREEN}vibecode shell $PROJECT_NAME${NC}  Enter shell"
     echo -e "  ${GREEN}vibecode code $PROJECT_NAME${NC}   Start Claude Code"
@@ -600,15 +665,43 @@ cmd_status() {
 
     show_mini_banner
     echo ""
-    echo "  Project: ${BOLD}$1${NC}"
+    echo -e "  Project: ${BOLD}$1${NC}"
     echo ""
 
     P="$CLAUDEBOX_HOME/$1"
+    C="$P/workspace/.claude"
+
+    echo -e "  ${BOLD}Core:${NC}"
     [ -d "$P/workspace/autocoder" ] && echo -e "    ${GREEN}✓${NC} Autocoder" || echo -e "    ${RED}✗${NC} Autocoder"
-    [ -f "$P/workspace/autocoder/mcp_server/vibecoding_server.py" ] && echo -e "    ${GREEN}✓${NC} MCP Server" || echo -e "    ${RED}✗${NC} MCP Server"
-    [ -d "$P/workspace/.claude" ] && echo -e "    ${GREEN}✓${NC} Claude Config" || echo -e "    ${RED}✗${NC} Claude Config"
+    [ -d "$C" ] && echo -e "    ${GREEN}✓${NC} Claude Config" || echo -e "    ${RED}✗${NC} Claude Config"
+
     echo ""
-    echo "  Size: $(du -sh "$P" 2>/dev/null | cut -f1)"
+    echo -e "  ${BOLD}MCP Servers:${NC}"
+    [ -f "$P/workspace/mcp_server/vibecoding_server.py" ] && echo -e "    ${GREEN}✓${NC} vibecoding-orchestrator" || echo -e "    ${DIM}○${NC} vibecoding-orchestrator"
+    [ -f "$C/mcp_servers.json" ] && {
+        grep -q "atom-of-thoughts" "$C/mcp_servers.json" && echo -e "    ${GREEN}✓${NC} atom-of-thoughts" || echo -e "    ${DIM}○${NC} atom-of-thoughts"
+        grep -q "sequential-thinking" "$C/mcp_servers.json" && echo -e "    ${GREEN}✓${NC} sequential-thinking" || echo -e "    ${DIM}○${NC} sequential-thinking"
+    }
+
+    echo ""
+    echo -e "  ${BOLD}Commands:${NC}"
+    [ -f "$C/commands/commit.md" ] && echo -e "    ${GREEN}✓${NC} /commit" || echo -e "    ${DIM}○${NC} /commit"
+    [ -f "$C/commands/verify.md" ] && echo -e "    ${GREEN}✓${NC} /verify" || echo -e "    ${DIM}○${NC} /verify"
+    [ -f "$C/commands/retrospective.md" ] && echo -e "    ${GREEN}✓${NC} /retrospective" || echo -e "    ${DIM}○${NC} /retrospective"
+
+    echo ""
+    echo -e "  ${BOLD}Quality:${NC}"
+    [ -f "$P/workspace/quality-gate.config.json" ] && echo -e "    ${GREEN}✓${NC} Quality Gate Config" || echo -e "    ${DIM}○${NC} Quality Gate Config"
+    [ -f "$P/workspace/hooks/pre-commit" ] && echo -e "    ${GREEN}✓${NC} Pre-commit Hook" || echo -e "    ${DIM}○${NC} Pre-commit Hook"
+
+    echo ""
+    echo -e "  ${BOLD}Skills:${NC}"
+    [ -d "$C/skills/planning-with-files" ] && echo -e "    ${GREEN}✓${NC} Planning Skill" || echo -e "    ${DIM}○${NC} Planning Skill"
+    LEARNED_COUNT=$(find "$C/skills/learned" -name "*.md" 2>/dev/null | wc -l)
+    echo -e "    ${DIM}$LEARNED_COUNT learned skills${NC}"
+
+    echo ""
+    echo -e "  Size: $(du -sh "$P" 2>/dev/null | cut -f1)"
     echo ""
 }
 
