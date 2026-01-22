@@ -263,6 +263,7 @@ def _create_container(project_id: str, port: int, project_dir: Path):
         environment={
             "VIBES_USE_BEADS": "true",
             "ANTHROPIC_API_KEY": os.environ.get("ANTHROPIC_API_KEY", ""),
+            "CLAUDE_CODE_OAUTH_TOKEN": os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", ""),
         },
         volumes={
             str(project_dir): {"bind": "/projects", "mode": "rw"},

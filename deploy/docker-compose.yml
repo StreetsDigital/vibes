@@ -87,6 +87,7 @@ services:
     environment:
       - VIBES_USE_BEADS=true
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
       # Route traffic through HTTP proxy (HPTS converts to SOCKS5->WARP)
       - HTTPS_PROXY=http://hpts:8080
       - HTTP_PROXY=http://hpts:8080
@@ -138,6 +139,7 @@ services:
       - MAX_PROJECTS=10
       - FRONTEND_IMAGE=deploy-frontend:latest
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - /home/vibes/projects:/home/vibes/projects
