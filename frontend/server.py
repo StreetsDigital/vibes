@@ -2694,6 +2694,6 @@ if __name__ == "__main__":
 
     # Use SocketIO if available for WebSocket support, otherwise plain Flask
     if WEBSOCKET_ENABLED:
-        socketio.run(app, host=args.host, port=args.port, debug=True, allow_unsafe_werkzeug=True)
+        socketio.run(app, host=args.host, port=args.port, debug=False, allow_unsafe_werkzeug=True)
     else:
-        app.run(host=args.host, port=args.port, debug=True)
+        app.run(host=args.host, port=args.port, debug=False)

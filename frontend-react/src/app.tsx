@@ -7,6 +7,7 @@ import { ToolsPanel } from './components/ToolsPanel';
 import { LogsPanel } from './components/LogsPanel';
 import { WorkflowPanel } from './components/WorkflowPanel';
 import { Modal } from './components/Modal';
+import { LogOverlay } from './components/LogOverlay';
 
 export function App() {
   const [currentView, setCurrentView] = useState<ViewType>('board');
@@ -270,6 +271,9 @@ export function App() {
         health={systemHealth.health}
         onRefresh={systemHealth.refresh}
       />
+
+      {/* Floating log overlay */}
+      <LogOverlay maxSizeMB={500} />
     </div>
   );
 }
