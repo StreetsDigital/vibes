@@ -12,7 +12,9 @@ RUN pip install --no-cache-dir \
     eventlet \
     pyyaml \
     sqlalchemy \
-    mcp
+    mcp \
+    requests \
+    psutil
 
 # Install Claude CLI and Skills tools
 RUN apt-get update && apt-get install -y curl git sudo && \

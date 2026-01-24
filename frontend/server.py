@@ -2227,7 +2227,46 @@ def polecat_completed():
 @requires_auth
 def get_agents():
     """Get information about running agents."""
-    result = {"subagents": [], "polecats": [], "containers": []}
+    result = {
+        "subagents": [],
+        "polecats": [],
+        "containers": [],
+        "autowork": [],
+        "retry_queue": {},
+        "config": {},
+    }
+
+    # Add autowork agent registry info
+    with _agent_registry_lock:
+        for agent_id, info in _agent_registry.items():
+            result["autowork"].append(
+                {
+                    "agent_id": agent_id,
+                    "task_id": info.get("task_id"),
+                    "pid": info.get("pid"),
+                    "start_time": info.get("start_time").isoformat()
+                    if info.get("start_time")
+                    else None,
+                    "last_output": info.get("last_output").isoformat()
+                    if info.get("last_output")
+                    else None,
+                }
+            )
+
+    # Add retry queue info
+    with _retry_lock:
+        result["retry_queue"] = {
+            "queue_length": len(_retry_queue),
+            "retry_counts": dict(_retry_counts),
+        }
+
+    # Add config
+    result["config"] = {
+        "memory_limit_gb": AGENT_MEMORY_LIMIT_GB,
+        "timeout_minutes": AGENT_TIMEOUT_MINUTES,
+        "max_retries": MAX_RETRIES,
+        "stall_seconds": WATCHDOG_STALL_SECONDS,
+    }
 
     try:
         # Check for subagent processes
@@ -2914,48 +2953,6 @@ def stream_agents():
             "X-Accel-Buffering": "no",
             "Connection": "keep-alive",
         },
-    )
-
-
-@app.route("/api/agents")
-@requires_auth
-def get_agents():
-    """Get list of currently running agents."""
-    with _agent_registry_lock:
-        agents = []
-        for agent_id, info in _agent_registry.items():
-            agents.append(
-                {
-                    "agent_id": agent_id,
-                    "task_id": info.get("task_id"),
-                    "pid": info.get("pid"),
-                    "start_time": info.get("start_time").isoformat()
-                    if info.get("start_time")
-                    else None,
-                    "last_output": info.get("last_output").isoformat()
-                    if info.get("last_output")
-                    else None,
-                }
-            )
-
-    # Get retry queue info
-    with _retry_lock:
-        retry_info = {
-            "queue_length": len(_retry_queue),
-            "retry_counts": dict(_retry_counts),
-        }
-
-    return jsonify(
-        {
-            "agents": agents,
-            "retry_queue": retry_info,
-            "config": {
-                "memory_limit_gb": AGENT_MEMORY_LIMIT_GB,
-                "timeout_minutes": AGENT_TIMEOUT_MINUTES,
-                "max_retries": MAX_RETRIES,
-                "stall_seconds": WATCHDOG_STALL_SECONDS,
-            },
-        }
     )
 
 
