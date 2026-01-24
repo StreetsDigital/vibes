@@ -23,18 +23,21 @@ import subprocess
 import yaml
 import hashlib
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, List
 from dataclasses import dataclass, field, asdict
 from enum import Enum
+import uuid
 
 
 # =============================================================================
 # BEAD STATUS
 # =============================================================================
 
+
 class BeadStatus(str, Enum):
     """Status values for Beads (mirrors Feature status)."""
+
     PENDING = "pending"
     IN_PROGRESS = "in_progress"
     PASSING = "passing"
@@ -44,6 +47,7 @@ class BeadStatus(str, Enum):
 
 class QualityStatus(str, Enum):
     """Quality gate status for Beads."""
+
     PENDING = "pending"
     RUNNING = "running"
     PASSED = "passed"
@@ -56,9 +60,11 @@ class QualityStatus(str, Enum):
 # BEAD (Git-backed Work Unit)
 # =============================================================================
 
+
 @dataclass
 class QualityState:
     """Quality gate state for a Bead."""
+
     status: str = "pending"
     tests: str = "pending"
     lint: str = "pending"
@@ -85,6 +91,7 @@ class Bead:
     Replaces SQLite Feature rows with YAML files stored in .git/beads/.
     Each state change is a git commit, providing full audit trail.
     """
+
     id: str  # e.g., "gt-feat-001"
     name: str
     description: str = ""
@@ -102,12 +109,19 @@ class Bead:
 
     # Metadata
     assigned_to: Optional[str] = None  # Polecat ID
-    git_commit: Optional[str] = None   # Last commit that modified this bead
+    git_commit: Optional[str] = None  # Last commit that modified this bead
+
+    # Task locking fields (prevent duplicate work by concurrent agents)
+    locked_by: Optional[str] = None  # Agent ID that holds the lock
+    locked_at: Optional[str] = None  # ISO timestamp when lock was acquired
+    lock_token: Optional[str] = None  # UUID for lock validation
 
     def to_yaml(self) -> str:
         """Serialize Bead to YAML."""
         # Convert status to string if it's an enum
-        status = self.status.value if isinstance(self.status, BeadStatus) else self.status
+        status = (
+            self.status.value if isinstance(self.status, BeadStatus) else self.status
+        )
         verification_status = self.verification_status
 
         data = {
@@ -125,10 +139,15 @@ class Bead:
             "convoy_id": self.convoy_id,
             "assigned_to": self.assigned_to,
             "git_commit": self.git_commit,
+            "locked_by": self.locked_by,
+            "locked_at": self.locked_at,
+            "lock_token": self.lock_token,
         }
         # Remove None values for cleaner YAML
         data = {k: v for k, v in data.items() if v is not None}
-        return yaml.dump(data, default_flow_style=False, sort_keys=False, allow_unicode=True)
+        return yaml.dump(
+            data, default_flow_style=False, sort_keys=False, allow_unicode=True
+        )
 
     @classmethod
     def from_yaml(cls, yaml_content: str) -> "Bead":
@@ -149,14 +168,19 @@ class Bead:
             convoy_id=data.get("convoy_id"),
             assigned_to=data.get("assigned_to"),
             git_commit=data.get("git_commit"),
+            locked_by=data.get("locked_by"),
+            locked_at=data.get("locked_at"),
+            lock_token=data.get("lock_token"),
         )
 
     def to_feature_dict(self) -> Dict[str, Any]:
         """Convert to Feature-compatible dict for backward compatibility."""
         # Convert status to string if it's an enum
-        status = self.status.value if isinstance(self.status, BeadStatus) else self.status
+        status = (
+            self.status.value if isinstance(self.status, BeadStatus) else self.status
+        )
 
-        return {
+        result = {
             "id": self.id,
             "name": self.name,
             "description": self.description,
@@ -166,11 +190,17 @@ class Bead:
             "verification_status": self.verification_status,
             "verification_notes": self.verification_notes,
         }
+        # Include lock info if present
+        if self.locked_by:
+            result["locked_by"] = self.locked_by
+            result["locked_at"] = self.locked_at
+        return result
 
 
 # =============================================================================
 # BEAD STORE (Git-backed Storage)
 # =============================================================================
+
 
 class BeadStore:
     """
@@ -206,7 +236,7 @@ class BeadStore:
             cwd=str(self.project_dir),
             capture_output=True,
             text=True,
-            check=check
+            check=check,
         )
 
     def _get_current_commit(self) -> Optional[str]:
@@ -242,7 +272,9 @@ class BeadStore:
             self._run_git("add", str(rel_path), check=False)
 
             commit_msg = message or f"Update bead: {bead.id} ({bead.status})"
-            result = self._run_git("commit", "-m", commit_msg, "--allow-empty", check=False)
+            result = self._run_git(
+                "commit", "-m", commit_msg, "--allow-empty", check=False
+            )
 
             # Update bead with commit hash
             bead.git_commit = self._get_current_commit()
@@ -251,7 +283,7 @@ class BeadStore:
             "success": True,
             "bead_id": bead.id,
             "path": str(bead_path),
-            "git_commit": bead.git_commit
+            "git_commit": bead.git_commit,
         }
 
     def load(self, bead_id: str) -> Optional[Bead]:
@@ -298,7 +330,86 @@ class BeadStore:
 
         return {"success": True, "bead_id": bead_id}
 
-    def get_next(self) -> Optional[Bead]:
+    def claim_task(
+        self, bead_id: str, agent_id: str, lock_timeout_minutes: int = 30
+    ) -> Optional[str]:
+        """
+        Atomically claim a task for an agent.
+
+        Returns lock_token on success, None if already locked by another agent.
+        Lock expires after lock_timeout_minutes (default 30).
+        """
+        bead = self.load(bead_id)
+        if not bead:
+            return None
+
+        # Check existing lock
+        if bead.locked_by and bead.locked_at:
+            try:
+                locked_time = datetime.fromisoformat(bead.locked_at)
+                if datetime.now() - locked_time < timedelta(
+                    minutes=lock_timeout_minutes
+                ):
+                    if bead.locked_by != agent_id:
+                        return None  # Still locked by another agent
+                    else:
+                        # Same agent, return existing token
+                        return bead.lock_token
+            except (ValueError, TypeError):
+                pass  # Invalid timestamp, allow claiming
+
+        # Acquire lock
+        token = str(uuid.uuid4())
+        bead.locked_by = agent_id
+        bead.locked_at = datetime.now().isoformat()
+        bead.lock_token = token
+        self.save(bead, f"Claimed by agent {agent_id}")
+        return token
+
+    def release_lock(self, bead_id: str, agent_id: str) -> bool:
+        """
+        Release lock when task completes.
+
+        Returns True if lock was released, False otherwise.
+        Only the agent that holds the lock can release it.
+        """
+        bead = self.load(bead_id)
+        if not bead:
+            return False
+
+        if bead.locked_by == agent_id:
+            bead.locked_by = None
+            bead.locked_at = None
+            bead.lock_token = None
+            self.save(bead, f"Lock released by agent {agent_id}")
+            return True
+
+        return False
+
+    def is_locked(self, bead_id: str, lock_timeout_minutes: int = 30) -> bool:
+        """Check if a bead is currently locked (and lock hasn't expired)."""
+        bead = self.load(bead_id)
+        if not bead or not bead.locked_by or not bead.locked_at:
+            return False
+
+        try:
+            locked_time = datetime.fromisoformat(bead.locked_at)
+            return datetime.now() - locked_time < timedelta(
+                minutes=lock_timeout_minutes
+            )
+        except (ValueError, TypeError):
+            return False
+
+    def get_locked_by(self, bead_id: str) -> Optional[str]:
+        """Get the agent ID that has this bead locked, or None if unlocked."""
+        bead = self.load(bead_id)
+        if not bead:
+            return None
+        if self.is_locked(bead_id):
+            return bead.locked_by
+        return None
+
+    def get_next(self, skip_locked: bool = False) -> Optional[Bead]:
         """
         Get the next Bead to work on.
 
@@ -306,21 +417,36 @@ class BeadStore:
         1. In-progress beads (resume work)
         2. Needs-review beads (fix issues)
         3. Pending beads by priority
+
+        If skip_locked is True, beads that are currently locked by other agents
+        will be skipped (useful for parallel agent execution).
         """
         beads = self.load_all()
 
-        # First: in-progress
-        in_progress = [b for b in beads if b.status == BeadStatus.IN_PROGRESS]
+        def is_available(bead: Bead) -> bool:
+            """Check if bead is available (not locked or lock expired)."""
+            if not skip_locked:
+                return True
+            return not self.is_locked(bead.id)
+
+        # First: in-progress (that we can work on)
+        in_progress = [
+            b for b in beads if b.status == BeadStatus.IN_PROGRESS and is_available(b)
+        ]
         if in_progress:
             return in_progress[0]
 
-        # Second: needs review
-        needs_review = [b for b in beads if b.status == BeadStatus.NEEDS_REVIEW]
+        # Second: needs review (that we can work on)
+        needs_review = [
+            b for b in beads if b.status == BeadStatus.NEEDS_REVIEW and is_available(b)
+        ]
         if needs_review:
             return needs_review[0]
 
-        # Third: pending by priority
-        pending = [b for b in beads if b.status == BeadStatus.PENDING]
+        # Third: pending by priority (that we can work on)
+        pending = [
+            b for b in beads if b.status == BeadStatus.PENDING and is_available(b)
+        ]
         if pending:
             pending.sort(key=lambda b: (-b.priority, b.id))
             return pending[0]
@@ -334,7 +460,9 @@ class BeadStore:
         total = len(beads)
         by_status = {}
         for status in BeadStatus:
-            by_status[status.value] = len([b for b in beads if b.status == status.value])
+            by_status[status.value] = len(
+                [b for b in beads if b.status == status.value]
+            )
 
         passing = by_status.get("passing", 0)
         progress_percent = round((passing / total * 100) if total > 0 else 0, 1)
@@ -346,7 +474,7 @@ class BeadStore:
             "in_progress": by_status.get("in_progress", 0),
             "skipped": by_status.get("skipped", 0),
             "needs_review": by_status.get("needs_review", 0),
-            "progress_percent": progress_percent
+            "progress_percent": progress_percent,
         }
 
     def generate_id(self, prefix: str = "gt-feat") -> str:
@@ -369,6 +497,7 @@ class BeadStore:
 # CONVOY (Group of Related Beads)
 # =============================================================================
 
+
 @dataclass
 class Convoy:
     """
@@ -379,6 +508,7 @@ class Convoy:
     - Tracking progress across multiple Beads
     - Assigning work to a Polecat
     """
+
     id: str
     name: str
     bead_ids: List[str] = field(default_factory=list)
@@ -424,7 +554,7 @@ class ConvoyStore:
             cwd=str(self.project_dir),
             capture_output=True,
             text=True,
-            check=check
+            check=check,
         )
 
     def save(self, convoy: Convoy, message: Optional[str] = None) -> Dict[str, Any]:
@@ -478,6 +608,7 @@ class ConvoyStore:
 # MAYOR (Orchestrator)
 # =============================================================================
 
+
 class Mayor:
     """
     High-level orchestrator for Beads and Convoys.
@@ -499,7 +630,7 @@ class Mayor:
         name: str,
         description: str = "",
         test_cases: List[str] = None,
-        priority: int = 0
+        priority: int = 0,
     ) -> Bead:
         """Create a new Bead."""
         bead_id = self.bead_store.generate_id()
@@ -510,7 +641,7 @@ class Mayor:
             description=description,
             test_cases=test_cases or [],
             priority=priority,
-            status=BeadStatus.PENDING
+            status=BeadStatus.PENDING,
         )
 
         self.bead_store.save(bead, f"Create bead: {name}")
@@ -522,18 +653,23 @@ class Mayor:
 
         for i, f in enumerate(features):
             bead = self.create_bead(
-                name=f.get("name", f"Feature {i+1}"),
+                name=f.get("name", f"Feature {i + 1}"),
                 description=f.get("description", ""),
                 test_cases=f.get("test_cases", []),
-                priority=f.get("priority", len(features) - i)
+                priority=f.get("priority", len(features) - i),
             )
             beads.append(bead)
 
         return beads
 
-    def get_next_bead(self) -> Optional[Bead]:
-        """Get the next Bead to work on."""
-        bead = self.bead_store.get_next()
+    def get_next_bead(self, skip_locked: bool = False) -> Optional[Bead]:
+        """
+        Get the next Bead to work on.
+
+        If skip_locked is True, beads that are currently locked by other agents
+        will be skipped.
+        """
+        bead = self.bead_store.get_next(skip_locked=skip_locked)
 
         if bead and bead.status == BeadStatus.PENDING:
             # Mark as in-progress
@@ -543,9 +679,7 @@ class Mayor:
         return bead
 
     def mark_bead_passing(
-        self,
-        bead_id: str,
-        quality_result: Optional[Dict[str, Any]] = None
+        self, bead_id: str, quality_result: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """Mark a Bead as passing."""
         bead = self.bead_store.load(bead_id)
@@ -566,7 +700,7 @@ class Mayor:
                 "name": bead.name,
                 "new_status": BeadStatus.NEEDS_REVIEW,
                 "quality_result": quality_result,
-                "message": "Quality checks failed. Fix issues before marking complete."
+                "message": "Quality checks failed. Fix issues before marking complete.",
             }
 
         # Mark as passing
@@ -582,7 +716,7 @@ class Mayor:
             "bead_id": bead_id,
             "name": bead.name,
             "new_status": BeadStatus.PASSING,
-            "progress": self.bead_store.get_stats()
+            "progress": self.bead_store.get_stats(),
         }
 
     def skip_bead(self, bead_id: str, reason: str = "") -> Dict[str, Any]:
@@ -602,19 +736,14 @@ class Mayor:
             "bead_id": bead_id,
             "name": bead.name,
             "reason": reason,
-            "new_priority": bead.priority
+            "new_priority": bead.priority,
         }
 
     def create_convoy(self, name: str, bead_ids: List[str]) -> Convoy:
         """Create a Convoy grouping related Beads."""
         convoy_id = self.convoy_store.generate_id()
 
-        convoy = Convoy(
-            id=convoy_id,
-            name=name,
-            bead_ids=bead_ids,
-            status="pending"
-        )
+        convoy = Convoy(id=convoy_id, name=name, bead_ids=bead_ids, status="pending")
 
         # Update beads with convoy reference
         for bead_id in bead_ids:
@@ -647,7 +776,7 @@ class Mayor:
             "name": convoy.name,
             "status": convoy.status,
             "progress": f"{complete}/{total}",
-            "beads": beads
+            "beads": beads,
         }
 
     def get_stats(self) -> Dict[str, Any]:
@@ -659,7 +788,10 @@ class Mayor:
 # MIGRATION UTILITIES
 # =============================================================================
 
-def migrate_feature_to_bead(feature_dict: Dict[str, Any], bead_store: BeadStore) -> Bead:
+
+def migrate_feature_to_bead(
+    feature_dict: Dict[str, Any], bead_store: BeadStore
+) -> Bead:
     """
     Migrate a SQLite Feature to a git-backed Bead.
 
@@ -706,6 +838,7 @@ def migrate_feature_to_bead(feature_dict: Dict[str, Any], bead_store: BeadStore)
 # FEATURE-COMPATIBLE WRAPPER
 # =============================================================================
 
+
 class BeadFeatureAdapter:
     """
     Adapter that makes BeadStore behave like the old SQLite feature system.
@@ -721,12 +854,24 @@ class BeadFeatureAdapter:
         """Get feature statistics (compatible with feature_get_stats)."""
         return self.bead_store.get_stats()
 
-    def get_next(self) -> Dict[str, Any]:
-        """Get next feature (compatible with feature_get_next)."""
-        bead = self.mayor.get_next_bead()
+    def get_next(self, agent_id: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Get next feature (compatible with feature_get_next).
+
+        If agent_id is provided, attempts to claim the task atomically.
+        Skips tasks that are already locked by other agents.
+        """
+        bead = self.mayor.get_next_bead(skip_locked=True)
 
         if bead is None:
             return {"message": "All features complete!", "remaining": 0}
+
+        # If agent_id provided, try to claim the task
+        if agent_id:
+            lock_token = self.bead_store.claim_task(bead.id, agent_id)
+            if not lock_token:
+                # Task was claimed by another agent, try to get next
+                return {"error": f"Task {bead.id} locked, try again"}
 
         result = bead.to_feature_dict()
 
@@ -741,7 +886,7 @@ class BeadFeatureAdapter:
         self,
         feature_id: str,
         skip_verification: bool = False,
-        quality_result: Optional[Dict[str, Any]] = None
+        quality_result: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Mark feature as passing (compatible with feature_mark_passing)."""
         # Convert int ID to bead ID if needed
@@ -764,7 +909,7 @@ class BeadFeatureAdapter:
         return {
             "success": True,
             "created_count": len(beads),
-            "features": [b.name for b in beads]
+            "features": [b.name for b in beads],
         }
 
     def get_for_regression(self, count: int = 3) -> Dict[str, Any]:
@@ -779,9 +924,7 @@ class BeadFeatureAdapter:
 
         selected = random.sample(passing, min(count, len(passing)))
 
-        return {
-            "features": [b.to_feature_dict() for b in selected]
-        }
+        return {"features": [b.to_feature_dict() for b in selected]}
 
     def verify(self, feature_id: str) -> Dict[str, Any]:
         """Get feature for verification."""
@@ -800,16 +943,14 @@ class BeadFeatureAdapter:
 # MCP TOOL DEFINITIONS (Kanban-style)
 # =============================================================================
 
+
 def get_kanban_tools() -> List[Dict[str, Any]]:
     """Get kanban-style tool definitions for MCP."""
     return [
         {
             "name": "kanban_get_board",
             "description": "Get the kanban board state with all columns (To Do, In Progress, Review, Done).",
-            "inputSchema": {
-                "type": "object",
-                "properties": {}
-            }
+            "inputSchema": {"type": "object", "properties": {}},
         },
         {
             "name": "kanban_move_task",
@@ -819,16 +960,16 @@ def get_kanban_tools() -> List[Dict[str, Any]]:
                 "properties": {
                     "bead_id": {
                         "type": "string",
-                        "description": "ID of the bead/task to move"
+                        "description": "ID of the bead/task to move",
                     },
                     "column": {
                         "type": "string",
                         "enum": ["todo", "in_progress", "review", "done"],
-                        "description": "Target column"
-                    }
+                        "description": "Target column",
+                    },
                 },
-                "required": ["bead_id", "column"]
-            }
+                "required": ["bead_id", "column"],
+            },
         },
         {
             "name": "kanban_create_task",
@@ -836,27 +977,24 @@ def get_kanban_tools() -> List[Dict[str, Any]]:
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "name": {
-                        "type": "string",
-                        "description": "Task name"
-                    },
+                    "name": {"type": "string", "description": "Task name"},
                     "description": {
                         "type": "string",
-                        "description": "Task description"
+                        "description": "Task description",
                     },
                     "test_cases": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "Test cases for the task"
+                        "description": "Test cases for the task",
                     },
                     "priority": {
                         "type": "integer",
-                        "description": "Priority (higher = more important)"
-                    }
+                        "description": "Priority (higher = more important)",
+                    },
                 },
-                "required": ["name"]
-            }
-        }
+                "required": ["name"],
+            },
+        },
     ]
 
 
@@ -874,7 +1012,7 @@ def init_kanban_system(project_dir: str) -> Dict[str, Any]:
         "success": True,
         "project_dir": project_dir,
         "beads_dir": str(_kanban_adapter.bead_store.beads_dir),
-        "backend": "gastown_beads"
+        "backend": "gastown_beads",
     }
 
 
@@ -888,16 +1026,23 @@ def handle_kanban_tool(name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
 
         # Group by status
         board = {
-            "todo": [b.to_feature_dict() for b in beads if b.status == BeadStatus.PENDING],
-            "in_progress": [b.to_feature_dict() for b in beads if b.status == BeadStatus.IN_PROGRESS],
-            "review": [b.to_feature_dict() for b in beads if b.status == BeadStatus.NEEDS_REVIEW],
-            "done": [b.to_feature_dict() for b in beads if b.status == BeadStatus.PASSING],
+            "todo": [
+                b.to_feature_dict() for b in beads if b.status == BeadStatus.PENDING
+            ],
+            "in_progress": [
+                b.to_feature_dict() for b in beads if b.status == BeadStatus.IN_PROGRESS
+            ],
+            "review": [
+                b.to_feature_dict()
+                for b in beads
+                if b.status == BeadStatus.NEEDS_REVIEW
+            ],
+            "done": [
+                b.to_feature_dict() for b in beads if b.status == BeadStatus.PASSING
+            ],
         }
 
-        return {
-            "board": board,
-            "stats": _kanban_adapter.get_stats()
-        }
+        return {"board": board, "stats": _kanban_adapter.get_stats()}
 
     elif name == "kanban_move_task":
         bead_id = arguments["bead_id"]
@@ -908,7 +1053,7 @@ def handle_kanban_tool(name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
             "todo": BeadStatus.PENDING,
             "in_progress": BeadStatus.IN_PROGRESS,
             "review": BeadStatus.NEEDS_REVIEW,
-            "done": BeadStatus.PASSING
+            "done": BeadStatus.PASSING,
         }
 
         bead = _kanban_adapter.bead_store.load(bead_id)
@@ -917,13 +1062,22 @@ def handle_kanban_tool(name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
 
         old_status = bead.status
         bead.status = column_to_status[column]
-        _kanban_adapter.bead_store.save(bead, f"Move {bead.name}: {old_status} -> {column}")
+
+        # Release lock when moving to done or review
+        if column in ("done", "review") and bead.locked_by:
+            bead.locked_by = None
+            bead.locked_at = None
+            bead.lock_token = None
+
+        _kanban_adapter.bead_store.save(
+            bead, f"Move {bead.name}: {old_status} -> {column}"
+        )
 
         return {
             "success": True,
             "bead_id": bead_id,
             "old_status": old_status,
-            "new_status": bead.status
+            "new_status": bead.status,
         }
 
     elif name == "kanban_create_task":
@@ -931,14 +1085,10 @@ def handle_kanban_tool(name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
             name=arguments["name"],
             description=arguments.get("description", ""),
             test_cases=arguments.get("test_cases", []),
-            priority=arguments.get("priority", 0)
+            priority=arguments.get("priority", 0),
         )
 
-        return {
-            "success": True,
-            "bead_id": bead.id,
-            "name": bead.name
-        }
+        return {"success": True, "bead_id": bead.id, "name": bead.name}
 
     return {"error": f"Unknown kanban tool: {name}"}
 
@@ -965,7 +1115,7 @@ if __name__ == "__main__":
         name="User Authentication",
         description="Implement JWT-based auth",
         test_cases=["Login works", "Logout works", "Token refresh works"],
-        priority=100
+        priority=100,
     )
     print(f"Created: {bead1.id} - {bead1.name}")
 
@@ -973,7 +1123,7 @@ if __name__ == "__main__":
         name="User Profile",
         description="Profile page with editing",
         test_cases=["View profile", "Edit profile"],
-        priority=50
+        priority=50,
     )
     print(f"Created: {bead2.id} - {bead2.name}")
 

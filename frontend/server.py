@@ -24,11 +24,33 @@ import hashlib
 import secrets
 import threading
 import queue
+import signal
+import time
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 from functools import wraps
 from flask import Flask, request, jsonify, send_from_directory, Response
 from flask_cors import CORS
+import requests
+import uuid
+
+# Optional: psutil for memory monitoring
+try:
+    import psutil
+
+    PSUTIL_AVAILABLE = True
+except ImportError:
+    PSUTIL_AVAILABLE = False
+    print("[vibes] psutil not available - memory monitoring disabled")
+
+# Optional: resource module for memory limits (Unix only)
+try:
+    import resource
+
+    RESOURCE_AVAILABLE = True
+except ImportError:
+    RESOURCE_AVAILABLE = False
+    print("[vibes] resource module not available - memory limits disabled")
 
 # Add mcp_server to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "mcp_server"))
@@ -106,6 +128,29 @@ _current_claude_process: subprocess.Popen = (
 # Auth config (set via environment or args)
 AUTH_USERNAME = os.environ.get("VIBES_USERNAME", "")
 AUTH_PASSWORD = os.environ.get("VIBES_PASSWORD", "")
+
+# Webhook config for notifications (Slack/Discord)
+WEBHOOK_URL = os.environ.get("VIBES_WEBHOOK_URL")
+
+# Agent configuration (can be overridden via environment)
+AGENT_MEMORY_LIMIT_GB = int(os.environ.get("VIBES_AGENT_MEMORY_LIMIT_GB", "4"))
+AGENT_TIMEOUT_MINUTES = int(os.environ.get("VIBES_AGENT_TIMEOUT_MINUTES", "30"))
+MAX_RETRIES = int(os.environ.get("VIBES_MAX_RETRIES", "3"))
+WATCHDOG_STALL_SECONDS = 300  # 5 minutes with no output = stalled
+
+# Agent registry for tracking running agents
+# Format: {agent_id: {"pid": int, "last_output": datetime, "task_id": str, "start_time": datetime}}
+_agent_registry: dict = {}
+_agent_registry_lock = threading.Lock()
+
+# Retry queue and counts
+_retry_queue: list = []  # List of task_ids to retry
+_retry_counts: dict = {}  # task_id -> attempt count
+_retry_lock = threading.Lock()
+
+# Watchdog state
+_watchdog_started = False
+_watchdog_thread = None
 
 # Autonomous mode system prompt
 AUTONOMOUS_SYSTEM_PROMPT = """You are an autonomous coding agent with a team of specialized subagents. You have MCP tools for task management and coding.
@@ -1057,24 +1102,211 @@ Respond helpfully and concisely."""
         return f"Error running Claude: {str(e)}"
 
 
-def run_autonomous_claude(parallel_agents: int = 1):
-    """Run Claude in autonomous mode - works through all tasks on the board."""
-    import tempfile
-    import time
+# ===========================================
+# Autonomous Agent Infrastructure
+# ===========================================
 
-    print(f"[autowork] Starting autonomous mode with {parallel_agents} agent(s)")
 
-    # Get first pending task for progress tracking
-    current_task_id = None
-    current_task_name = "Autonomous work"
+def notify_webhook(task_name: str, status: str, message: str):
+    """Send notification to configured webhook (Slack/Discord)."""
+    if not WEBHOOK_URL:
+        return
+
+    emoji = "✅" if status == "passing" else "❌" if status == "failed" else "⏱️"
+    payload = {"text": f"{emoji} **{task_name}**\n{message}"}
+
+    # Discord uses 'content' instead of 'text'
+    if "discord" in WEBHOOK_URL.lower():
+        payload = {"content": f"{emoji} **{task_name}**\n{message}"}
+
+    try:
+        requests.post(WEBHOOK_URL, json=payload, timeout=5)
+    except Exception as e:
+        print(f"[webhook] Failed to send notification: {e}")
+
+
+def set_memory_limit():
+    """Set memory limit for subprocess (Unix only)."""
+    if not RESOURCE_AVAILABLE:
+        return
+
+    limit_bytes = AGENT_MEMORY_LIMIT_GB * 1024 * 1024 * 1024
+    try:
+        resource.setrlimit(resource.RLIMIT_AS, (limit_bytes, limit_bytes))
+    except Exception as e:
+        print(f"[autowork] Could not set memory limit: {e}")
+
+
+def register_agent(agent_id: str, pid: int, task_id: str):
+    """Register an agent in the global registry."""
+    with _agent_registry_lock:
+        _agent_registry[agent_id] = {
+            "pid": pid,
+            "task_id": task_id,
+            "last_output": datetime.now(),
+            "start_time": datetime.now(),
+        }
+    print(f"[autowork] Registered agent {agent_id} (pid={pid}, task={task_id})")
+
+
+def update_agent_activity(agent_id: str):
+    """Update the last_output timestamp for an agent."""
+    with _agent_registry_lock:
+        if agent_id in _agent_registry:
+            _agent_registry[agent_id]["last_output"] = datetime.now()
+
+
+def unregister_agent(agent_id: str):
+    """Remove an agent from the registry."""
+    with _agent_registry_lock:
+        if agent_id in _agent_registry:
+            del _agent_registry[agent_id]
+            print(f"[autowork] Unregistered agent {agent_id}")
+
+
+def queue_for_retry(task_id: str):
+    """Add a task to the retry queue."""
+    with _retry_lock:
+        attempts = _retry_counts.get(task_id, 0)
+        if attempts < MAX_RETRIES:
+            _retry_counts[task_id] = attempts + 1
+            _retry_queue.append(task_id)
+            print(
+                f"[autowork] Task {task_id} queued for retry ({attempts + 1}/{MAX_RETRIES})"
+            )
+            return True
+        else:
+            print(
+                f"[autowork] Task {task_id} failed after {MAX_RETRIES} retries, skipping"
+            )
+            return False
+
+
+def get_next_task_id() -> str:
+    """Get next task ID from retry queue or pending tasks."""
+    # First check retry queue
+    with _retry_lock:
+        if _retry_queue:
+            return _retry_queue.pop(0)
+
+    # Then get from board
     if _bead_store:
         beads = _bead_store.load_all()
         pending = [
-            b for b in beads if str(b.status) in ["pending", "BeadStatus.PENDING"]
+            b
+            for b in beads
+            if str(b.status) in ["pending", "BeadStatus.PENDING"]
+            and not _bead_store.is_locked(b.id)
         ]
         if pending:
-            current_task_id = pending[0].id
-            current_task_name = pending[0].name
+            # Sort by priority
+            pending.sort(key=lambda b: (-b.priority, b.id))
+            return pending[0].id
+
+    return None
+
+
+def clear_retry_count(task_id: str):
+    """Clear retry count for a successfully completed task."""
+    with _retry_lock:
+        _retry_counts.pop(task_id, None)
+
+
+def watchdog_thread_func():
+    """Watchdog thread that kills stalled agents and queues retries."""
+    print("[watchdog] Started watchdog thread")
+
+    while True:
+        time.sleep(60)  # Check every minute
+        now = datetime.now()
+
+        with _agent_registry_lock:
+            stalled_agents = []
+            for agent_id, info in list(_agent_registry.items()):
+                last = info.get("last_output")
+                if last and (now - last).total_seconds() > WATCHDOG_STALL_SECONDS:
+                    stalled_agents.append((agent_id, info))
+
+        # Kill stalled agents (outside lock to avoid deadlock)
+        for agent_id, info in stalled_agents:
+            print(
+                f"[watchdog] Agent {agent_id} stalled (no output for {WATCHDOG_STALL_SECONDS}s), killing..."
+            )
+            try:
+                os.kill(info["pid"], signal.SIGKILL)
+            except (ProcessLookupError, OSError) as e:
+                print(f"[watchdog] Could not kill process {info['pid']}: {e}")
+
+            # Queue task for retry
+            task_id = info.get("task_id")
+            if task_id:
+                queue_for_retry(task_id)
+                # Release the lock on the task
+                if _bead_store:
+                    _bead_store.release_lock(task_id, agent_id)
+
+            # Notify
+            notify_webhook(
+                f"Agent {agent_id}",
+                "failed",
+                f"Agent stalled on task {task_id}, killed by watchdog",
+            )
+
+            # Remove from registry
+            unregister_agent(agent_id)
+
+
+def start_watchdog():
+    """Start the watchdog thread if not already running."""
+    global _watchdog_started, _watchdog_thread
+
+    if _watchdog_started:
+        return
+
+    _watchdog_started = True
+    _watchdog_thread = threading.Thread(target=watchdog_thread_func, daemon=True)
+    _watchdog_thread.start()
+
+
+def run_autonomous_claude(parallel_agents: int = 1):
+    """Run Claude in autonomous mode - works through all tasks on the board."""
+    import tempfile
+
+    # Start watchdog on first autowork call
+    start_watchdog()
+
+    # Generate unique agent ID
+    agent_id = str(uuid.uuid4())[:8]
+
+    print(
+        f"[autowork] Starting autonomous mode with {parallel_agents} agent(s), agent_id={agent_id}"
+    )
+
+    # Get next task (from retry queue first, then board)
+    current_task_id = get_next_task_id()
+    current_task_name = "Autonomous work"
+
+    if not current_task_id:
+        print(f"[autowork] No pending tasks found")
+        return
+
+    # Load task details
+    if _bead_store:
+        bead = _bead_store.load(current_task_id)
+        if bead:
+            current_task_name = bead.name
+
+            # Claim the task (atomic locking)
+            lock_token = _bead_store.claim_task(
+                current_task_id, agent_id, AGENT_TIMEOUT_MINUTES
+            )
+            if not lock_token:
+                print(
+                    f"[autowork] Could not claim task {current_task_id} (already locked)"
+                )
+                return
+
+            print(f"[autowork] Claimed task {current_task_id} ({current_task_name})")
 
     # Start progress tracking
     if current_task_id:
@@ -1118,28 +1350,69 @@ def run_autonomous_claude(parallel_agents: int = 1):
     print(f"[autowork] Running: {cmd[:100]}...")
 
     try:
-        process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,  # Combine stderr with stdout
-            text=True,
-            cwd=str(_project_dir),
-            env={**os.environ, "HOME": "/home/vibes"},
-            shell=True,
-            bufsize=1,  # Line buffered
-        )
+        # Create process with optional memory limit
+        popen_kwargs = {
+            "stdout": subprocess.PIPE,
+            "stderr": subprocess.STDOUT,  # Combine stderr with stdout
+            "text": True,
+            "cwd": str(_project_dir),
+            "env": {**os.environ, "HOME": "/home/vibes"},
+            "shell": True,
+            "bufsize": 1,  # Line buffered
+        }
+
+        # Add memory limit preexec_fn on Unix
+        if RESOURCE_AVAILABLE:
+            popen_kwargs["preexec_fn"] = set_memory_limit
+
+        process = subprocess.Popen(cmd, **popen_kwargs)
+
+        # Register agent for watchdog
+        register_agent(agent_id, process.pid, current_task_id)
 
         # Stream output and update chat/progress periodically
         output_lines = []
         last_update = time.time()
         last_stage_check = time.time()
+        last_memory_check = time.time()
         update_interval = 10  # Update chat every 10 seconds
         stage_check_interval = 3  # Check for stage changes every 3 seconds
+        memory_check_interval = 30  # Check memory every 30 seconds
         last_detected_stage = None
 
         for line in iter(process.stdout.readline, ""):
             output_lines.append(line)
-            print(f"[autowork] {line.rstrip()}")
+            print(f"[autowork] [{agent_id}] {line.rstrip()}")
+
+            # Update agent activity (heartbeat for watchdog)
+            update_agent_activity(agent_id)
+
+            # Emit immediately via SSE for real-time visibility
+            event_bus.emit_typed(
+                EventType.CLAUDE_OUTPUT,
+                {
+                    "agent_id": agent_id,
+                    "line": line.rstrip(),
+                    "task_id": current_task_id,
+                    "timestamp": datetime.now().isoformat(),
+                },
+            )
+
+            # Memory monitoring
+            if (
+                PSUTIL_AVAILABLE
+                and time.time() - last_memory_check > memory_check_interval
+            ):
+                last_memory_check = time.time()
+                try:
+                    proc = psutil.Process(process.pid)
+                    memory_gb = proc.memory_info().rss / (1024**3)
+                    if memory_gb > AGENT_MEMORY_LIMIT_GB * 0.875:  # 87.5% of limit
+                        print(
+                            f"[autowork] WARNING: Agent {agent_id} using {memory_gb:.1f}GB (limit: {AGENT_MEMORY_LIMIT_GB}GB)"
+                        )
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    pass
 
             # Check for stage changes in output
             if (
@@ -1166,7 +1439,7 @@ def run_autonomous_claude(parallel_agents: int = 1):
                 history.append(
                     {
                         "role": "assistant",
-                        "content": f"📝 **Progress update:**\n```\n{progress_text[-1000:]}\n```",
+                        "content": f"📝 **Progress update ({agent_id}):**\n```\n{progress_text[-1000:]}\n```",
                         "timestamp": datetime.now().isoformat(),
                     }
                 )
@@ -1176,7 +1449,7 @@ def run_autonomous_claude(parallel_agents: int = 1):
         stdout = "".join(output_lines)
 
         if process.returncode == 0:
-            print(f"[autowork] Completed successfully")
+            print(f"[autowork] [{agent_id}] Completed successfully")
 
             # Generate 2-sentence retro
             retro = generate_auto_retro(current_task_name, stdout[-500:])
@@ -1184,13 +1457,20 @@ def run_autonomous_claude(parallel_agents: int = 1):
             # Complete progress tracking with retro
             if current_task_id:
                 progress_tracker.complete_task(current_task_id, retro)
+                # Release lock and clear retry count
+                if _bead_store:
+                    _bead_store.release_lock(current_task_id, agent_id)
+                clear_retry_count(current_task_id)
+
+            # Send success notification
+            notify_webhook(current_task_name, "passing", retro)
 
             # Save final output to chat history
             history = load_chat_history()
             history.append(
                 {
                     "role": "assistant",
-                    "content": f"✅ **Autonomous work complete!**\n\n📋 **Retro:** {retro}\n\n{stdout[-1500:] if len(stdout) > 1500 else stdout}",
+                    "content": f"✅ **Autonomous work complete!** (agent: {agent_id})\n\n📋 **Retro:** {retro}\n\n{stdout[-1500:] if len(stdout) > 1500 else stdout}",
                     "timestamp": datetime.now().isoformat(),
                 }
             )
@@ -1199,19 +1479,29 @@ def run_autonomous_claude(parallel_agents: int = 1):
             # Broadcast board update
             broadcast_board_update()
         else:
-            print(f"[autowork] Error: returncode={process.returncode}")
+            print(f"[autowork] [{agent_id}] Error: returncode={process.returncode}")
 
             # Mark progress as failed
             if current_task_id:
                 progress_tracker.fail_task(
                     current_task_id, f"Exit code: {process.returncode}"
                 )
+                # Release lock
+                if _bead_store:
+                    _bead_store.release_lock(current_task_id, agent_id)
+                # Queue for retry
+                queue_for_retry(current_task_id)
+
+            # Send failure notification
+            notify_webhook(
+                current_task_name, "failed", f"Exit code: {process.returncode}"
+            )
 
             history = load_chat_history()
             history.append(
                 {
                     "role": "assistant",
-                    "content": f"❌ **Autonomous work failed**\n\nError code: {process.returncode}\n\n```\n{stdout[-1000:]}\n```",
+                    "content": f"❌ **Autonomous work failed** (agent: {agent_id})\n\nError code: {process.returncode}\n\n```\n{stdout[-1000:]}\n```",
                     "timestamp": datetime.now().isoformat(),
                 }
             )
@@ -1219,28 +1509,45 @@ def run_autonomous_claude(parallel_agents: int = 1):
 
     except subprocess.TimeoutExpired:
         process.kill()
-        print("[autowork] Timed out after 10 minutes")
+        print(f"[autowork] [{agent_id}] Timed out after 10 minutes")
+
+        # Release lock and queue for retry
+        if current_task_id and _bead_store:
+            _bead_store.release_lock(current_task_id, agent_id)
+            queue_for_retry(current_task_id)
+
+        # Send timeout notification
+        notify_webhook(current_task_name, "timeout", "Timed out after 10 minutes")
+
         history = load_chat_history()
         history.append(
             {
                 "role": "assistant",
-                "content": "⏱️ **Autonomous work timed out** after 10 minutes. Check the board for progress.",
+                "content": f"⏱️ **Autonomous work timed out** (agent: {agent_id}) after 10 minutes. Check the board for progress.",
                 "timestamp": datetime.now().isoformat(),
             }
         )
         save_chat_history(history[-100:])
     except Exception as e:
-        print(f"[autowork] Exception: {e}")
+        print(f"[autowork] [{agent_id}] Exception: {e}")
+
+        # Release lock and queue for retry
+        if current_task_id and _bead_store:
+            _bead_store.release_lock(current_task_id, agent_id)
+            queue_for_retry(current_task_id)
+
         history = load_chat_history()
         history.append(
             {
                 "role": "assistant",
-                "content": f"❌ **Error:** {str(e)}",
+                "content": f"❌ **Error** (agent: {agent_id}): {str(e)}",
                 "timestamp": datetime.now().isoformat(),
             }
         )
         save_chat_history(history[-100:])
     finally:
+        # Always unregister agent and clean up
+        unregister_agent(agent_id)
         try:
             os.unlink(prompt_file)
         except:
@@ -2571,6 +2878,84 @@ def stream_events():
             "X-Accel-Buffering": "no",
             "Connection": "keep-alive",
         },
+    )
+
+
+@app.route("/api/stream/agents")
+@requires_auth
+def stream_agents():
+    """
+    Stream agent output in real-time via SSE.
+
+    Dedicated endpoint for monitoring autonomous agents.
+    Each event includes agent_id, task_id, and output line.
+
+    Connect with EventSource:
+        const es = new EventSource('/api/stream/agents');
+        es.addEventListener('claude:output', (e) => {
+            const data = JSON.parse(e.data);
+            console.log(`[${data.agent_id}] ${data.line}`);
+        });
+    """
+    # Filter to only agent-related events
+    stream = SSEStream(
+        event_bus,
+        event_types=[
+            EventType.CLAUDE_OUTPUT,
+            EventType.CLAUDE_DONE,
+            EventType.CLAUDE_ERROR,
+        ],
+    )
+    return Response(
+        stream.generate(),
+        mimetype="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
+
+
+@app.route("/api/agents")
+@requires_auth
+def get_agents():
+    """Get list of currently running agents."""
+    with _agent_registry_lock:
+        agents = []
+        for agent_id, info in _agent_registry.items():
+            agents.append(
+                {
+                    "agent_id": agent_id,
+                    "task_id": info.get("task_id"),
+                    "pid": info.get("pid"),
+                    "start_time": info.get("start_time").isoformat()
+                    if info.get("start_time")
+                    else None,
+                    "last_output": info.get("last_output").isoformat()
+                    if info.get("last_output")
+                    else None,
+                }
+            )
+
+    # Get retry queue info
+    with _retry_lock:
+        retry_info = {
+            "queue_length": len(_retry_queue),
+            "retry_counts": dict(_retry_counts),
+        }
+
+    return jsonify(
+        {
+            "agents": agents,
+            "retry_queue": retry_info,
+            "config": {
+                "memory_limit_gb": AGENT_MEMORY_LIMIT_GB,
+                "timeout_minutes": AGENT_TIMEOUT_MINUTES,
+                "max_retries": MAX_RETRIES,
+                "stall_seconds": WATCHDOG_STALL_SECONDS,
+            },
+        }
     )
 
 
