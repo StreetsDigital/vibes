@@ -1390,8 +1390,9 @@ def run_autonomous_claude(parallel_agents: int = 1):
 
     mcp_config = "/home/vibes/.claude/settings.json"
 
-    # Run Claude with longer timeout for autonomous work (10 minutes)
-    cmd = f'runuser -u vibes -- bash -c \'cd "{_project_dir}" && claude --print --dangerously-skip-permissions --mcp-config {mcp_config} -p "$(cat {prompt_file})"\''
+    # Run Claude with longer timeout for autonomous work (30 minutes)
+    # Use --output-format stream-json with --verbose for real-time streaming output
+    cmd = f'runuser -u vibes -- bash -c \'cd "{_project_dir}" && claude --print --dangerously-skip-permissions --verbose --output-format stream-json --mcp-config {mcp_config} -p "$(cat {prompt_file})"\''
 
     print(f"[autowork] Running: {cmd[:100]}...")
 
@@ -1408,8 +1409,9 @@ def run_autonomous_claude(parallel_agents: int = 1):
         }
 
         # Add memory limit preexec_fn on Unix
-        if RESOURCE_AVAILABLE:
-            popen_kwargs["preexec_fn"] = set_memory_limit
+        # Temporarily disabled - may be too restrictive for Node.js + MCP servers
+        # if RESOURCE_AVAILABLE:
+        #     popen_kwargs["preexec_fn"] = set_memory_limit
 
         process = subprocess.Popen(cmd, **popen_kwargs)
 
@@ -1427,22 +1429,72 @@ def run_autonomous_claude(parallel_agents: int = 1):
         last_detected_stage = None
 
         for line in iter(process.stdout.readline, ""):
+            # Parse stream-json format for better visibility
+            display_line = line.rstrip()
+            try:
+                data = json.loads(line)
+                msg_type = data.get("type", "")
+
+                if msg_type == "assistant":
+                    # Extract text content from assistant messages
+                    message = data.get("message", {})
+                    content = message.get("content", [])
+                    for block in content:
+                        if block.get("type") == "text":
+                            text = block.get("text", "")
+                            if text:
+                                display_line = f"💬 {text[:200]}"
+                        elif block.get("type") == "tool_use":
+                            tool_name = block.get("name", "unknown")
+                            display_line = f"🔧 Using tool: {tool_name}"
+                elif msg_type == "content_block_start":
+                    block = data.get("content_block", {})
+                    if block.get("type") == "tool_use":
+                        display_line = f"🔧 Tool: {block.get('name', 'unknown')}"
+                    elif block.get("type") == "text":
+                        display_line = "💭 Thinking..."
+                elif msg_type == "content_block_delta":
+                    delta = data.get("delta", {})
+                    if delta.get("type") == "text_delta":
+                        text = delta.get("text", "")
+                        if text.strip():
+                            display_line = f"📝 {text[:100]}"
+                    elif delta.get("type") == "input_json_delta":
+                        # Tool input being streamed
+                        display_line = None  # Skip verbose tool input
+                elif msg_type == "result":
+                    # Final result
+                    result = data.get("result", "")
+                    if result:
+                        display_line = f"✅ Result: {str(result)[:100]}"
+                elif msg_type == "error":
+                    error = data.get("error", {})
+                    display_line = f"❌ Error: {error.get('message', str(error))}"
+                else:
+                    # For other types, show abbreviated
+                    display_line = f"[{msg_type}]" if msg_type else None
+            except json.JSONDecodeError:
+                # Not JSON, show as-is
+                pass
+
             output_lines.append(line)
-            print(f"[autowork] [{agent_id}] {line.rstrip()}")
+            if display_line:
+                print(f"[autowork] [{agent_id}] {display_line}")
 
-            # Update agent activity (heartbeat for watchdog)
-            update_agent_activity(agent_id)
+                # Update agent activity (heartbeat for watchdog) only on visible output
+                update_agent_activity(agent_id)
 
-            # Emit immediately via SSE for real-time visibility
-            event_bus.emit_typed(
-                EventType.CLAUDE_OUTPUT,
-                {
-                    "agent_id": agent_id,
-                    "line": line.rstrip(),
-                    "task_id": current_task_id,
-                    "timestamp": datetime.now().isoformat(),
-                },
-            )
+                # Emit immediately via SSE for real-time visibility
+                event_bus.emit_typed(
+                    EventType.CLAUDE_OUTPUT,
+                    {
+                        "agent_id": agent_id,
+                        "line": display_line,
+                        "raw": line.rstrip(),
+                        "task_id": current_task_id,
+                        "timestamp": datetime.now().isoformat(),
+                    },
+                )
 
             # Memory monitoring
             if (
@@ -1491,7 +1543,7 @@ def run_autonomous_claude(parallel_agents: int = 1):
                 )
                 save_chat_history(history[-100:])
 
-        process.wait(timeout=600)
+        process.wait(timeout=1800)
         stdout = "".join(output_lines)
 
         if process.returncode == 0:
@@ -1555,7 +1607,7 @@ def run_autonomous_claude(parallel_agents: int = 1):
 
     except subprocess.TimeoutExpired:
         process.kill()
-        print(f"[autowork] [{agent_id}] Timed out after 10 minutes")
+        print(f"[autowork] [{agent_id}] Timed out after 30 minutes")
 
         # Release lock and queue for retry
         if current_task_id and _bead_store:
@@ -1563,13 +1615,13 @@ def run_autonomous_claude(parallel_agents: int = 1):
             queue_for_retry(current_task_id)
 
         # Send timeout notification
-        notify_webhook(current_task_name, "timeout", "Timed out after 10 minutes")
+        notify_webhook(current_task_name, "timeout", "Timed out after 30 minutes")
 
         history = load_chat_history()
         history.append(
             {
                 "role": "assistant",
-                "content": f"⏱️ **Autonomous work timed out** (agent: {agent_id}) after 10 minutes. Check the board for progress.",
+                "content": f"⏱️ **Autonomous work timed out** (agent: {agent_id}) after 30 minutes. Check the board for progress.",
                 "timestamp": datetime.now().isoformat(),
             }
         )
