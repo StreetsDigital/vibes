@@ -45,6 +45,10 @@ from task_decomposer import (
     decompose_task, quick_decompose, estimate_task_size, Subtask, format_subtasks_as_markdown
 )
 
+# Pre-compiled regex for log parsing (memory optimization)
+import re as _re_module
+_LOG_PATTERN = _re_module.compile(r'^(\d{4}-\d{2}-\d{2}T[\d:.]+Z)\s+\[(\w+)\]\s+(.*)$')
+
 # Global progress tracker
 def emit_progress(data):
     """Emit progress update to all clients."""
@@ -734,59 +738,66 @@ def stop_chat():
 @app.route('/api/logs')
 @requires_auth
 def get_claude_logs():
-    """Get Claude debug logs."""
-    import re
+    """Get Claude debug logs - memory efficient version."""
     from pathlib import Path
 
     filter_type = request.args.get('filter', 'all')
-    limit = int(request.args.get('limit', 200))
+    limit = min(int(request.args.get('limit', 200)), 500)  # Cap at 500
 
     debug_dir = Path.home() / '.claude' / 'debug'
     logs = []
 
-    if debug_dir.exists():
-        # Get most recent debug files
-        debug_files = sorted(debug_dir.glob('*.txt'), key=lambda f: f.stat().st_mtime, reverse=True)[:5]
+    if not debug_dir.exists():
+        return jsonify({"logs": []})
 
-        for debug_file in debug_files:
-            try:
-                content = debug_file.read_text()
-                for line in content.split('\n'):
-                    if not line.strip():
+    try:
+        debug_files = sorted(debug_dir.glob('*.txt'), key=lambda f: f.stat().st_mtime, reverse=True)[:3]
+    except Exception:
+        return jsonify({"logs": []})
+
+    for debug_file in debug_files:
+        if len(logs) >= limit * 2:  # Early exit - we have enough
+            break
+        try:
+            # Read line by line to avoid loading entire file
+            with open(debug_file, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
                         continue
 
-                    # Parse log line: 2026-01-21T10:49:59.077Z [LEVEL] message
-                    match = re.match(r'^(\d{4}-\d{2}-\d{2}T[\d:.]+Z)\s+\[(\w+)\]\s+(.*)$', line)
-                    if match:
-                        timestamp, level, message = match.groups()
-                        level = level.lower()
+                    # Use pre-compiled regex
+                    match = _LOG_PATTERN.match(line)
+                    if not match:
+                        continue
+
+                    timestamp, level, message = match.groups()
+                    level = level.lower()
+                    msg_lower = message.lower()
+
+                    # Categorize by content
+                    if 'error' in level or 'statsig' in msg_lower or 'gate' in msg_lower:
+                        source = 'system'
+                    else:
                         source = 'claude'
 
-                        # Categorize by content
-                        if 'mcp' in message.lower():
-                            source = 'claude'
-                        elif 'statsig' in message.lower() or 'gate' in message.lower():
-                            source = 'system'
-                        elif 'error' in level:
-                            source = 'system'
+                    # Apply filter
+                    if filter_type == 'error' and level != 'error':
+                        continue
+                    elif filter_type == 'claude' and source != 'claude':
+                        continue
+                    elif filter_type == 'system' and source != 'system':
+                        continue
 
-                        # Apply filter
-                        if filter_type == 'error' and level != 'error':
-                            continue
-                        elif filter_type == 'claude' and source != 'claude':
-                            continue
-                        elif filter_type == 'system' and source != 'system':
-                            continue
-
-                        logs.append({
-                            'id': f"{debug_file.stem}_{len(logs)}",
-                            'timestamp': timestamp,
-                            'level': level if level in ['info', 'warn', 'error', 'debug'] else 'info',
-                            'source': source,
-                            'message': message[:500]  # Truncate long messages
-                        })
-            except Exception as e:
-                print(f"[logs] Error reading {debug_file}: {e}")
+                    logs.append({
+                        'id': f"{debug_file.stem}_{len(logs)}",
+                        'timestamp': timestamp,
+                        'level': level if level in ('info', 'warn', 'error', 'debug') else 'info',
+                        'source': source,
+                        'message': message[:500]
+                    })
+        except Exception:
+            continue
 
     # Sort by timestamp and limit
     logs.sort(key=lambda x: x['timestamp'], reverse=True)
