@@ -35,26 +35,43 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "mcp_server"))
 
 from gastown_integration import BeadStore, Bead, BeadStatus, Mayor
 from realtime import (
-    event_bus, EventType, Event, SSEStream, ClaudeStreamReader,
-    emit_board_update, emit_chat_message, emit_task_event, emit_logs
+    event_bus,
+    EventType,
+    Event,
+    SSEStream,
+    ClaudeStreamReader,
+    emit_board_update,
+    emit_chat_message,
+    emit_task_event,
+    emit_logs,
 )
 from task_progress import (
-    TaskProgressTracker, TaskStage, detect_stage_from_output, generate_auto_retro
+    TaskProgressTracker,
+    TaskStage,
+    detect_stage_from_output,
+    generate_auto_retro,
 )
 from task_decomposer import (
-    decompose_task, quick_decompose, estimate_task_size, Subtask, format_subtasks_as_markdown
+    decompose_task,
+    quick_decompose,
+    estimate_task_size,
+    Subtask,
+    format_subtasks_as_markdown,
 )
 
 # Pre-compiled regex for log parsing (memory optimization)
 import re as _re_module
-_LOG_PATTERN = _re_module.compile(r'^(\d{4}-\d{2}-\d{2}T[\d:.]+Z)\s+\[(\w+)\]\s+(.*)$')
+
+_LOG_PATTERN = _re_module.compile(r"^(\d{4}-\d{2}-\d{2}T[\d:.]+Z)\s+\[(\w+)\]\s+(.*)$")
+
 
 # Global progress tracker
 def emit_progress(data):
     """Emit progress update to all clients."""
     if WEBSOCKET_ENABLED:
-        socketio.emit('task:progress', data['data'])
-    event_bus.emit_typed(EventType.CLAUDE_OUTPUT, data['data'])
+        socketio.emit("task:progress", data["data"])
+    event_bus.emit_typed(EventType.CLAUDE_OUTPUT, data["data"])
+
 
 progress_tracker = TaskProgressTracker(emit_progress)
 
@@ -66,7 +83,8 @@ CORS(app)
 # Try to import Flask-SocketIO for WebSocket support
 try:
     from flask_socketio import SocketIO, emit as ws_emit, join_room, leave_room
-    socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
+
+    socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
     WEBSOCKET_ENABLED = True
 except ImportError:
     socketio = None
@@ -81,7 +99,9 @@ _project_dir: Path = None
 _bead_store: BeadStore = None
 _mayor: Mayor = None
 _projects_root: Path = None  # Root directory containing all projects
-_current_claude_process: subprocess.Popen = None  # Track current Claude process for stop functionality
+_current_claude_process: subprocess.Popen = (
+    None  # Track current Claude process for stop functionality
+)
 
 # Auth config (set via environment or args)
 AUTH_USERNAME = os.environ.get("VIBES_USERNAME", "")
@@ -139,10 +159,20 @@ AUTONOMOUS_SYSTEM_PROMPT = """You are an autonomous coding agent with a team of 
 ## RULES:
 - DO NOT ask questions - make reasonable decisions and proceed
 - DO NOT wait for approval - execute autonomously
+- DO NOT ask "Ready for the next one?" or similar - just continue immediately
+- DO NOT pause between tasks - immediately start the next one
 - DO update the board as you work (move tasks through columns)
 - DO write production-quality code with tests
 - DO spawn specialized agents for their domains
 - DO use existing code patterns from the codebase
+- WHEN A TASK IS DONE: Immediately call kanban_get_board and start the next task
+
+## CRITICAL: CONTINUOUS EXECUTION
+After completing ANY task, you MUST immediately:
+1. Call kanban_get_board
+2. Pick the next pending task
+3. Start working on it
+NEVER stop to ask if you should continue. NEVER say "Ready for the next one?". Just DO IT.
 
 START NOW. Get the board, analyze tasks, spawn appropriate agents, and execute."""
 
@@ -151,21 +181,21 @@ def check_auth(username: str, password: str) -> bool:
     """Check if username/password is valid."""
     if not AUTH_USERNAME or not AUTH_PASSWORD:
         return True  # No auth configured
-    return secrets.compare_digest(username, AUTH_USERNAME) and \
-           secrets.compare_digest(password, AUTH_PASSWORD)
+    return secrets.compare_digest(username, AUTH_USERNAME) and secrets.compare_digest(
+        password, AUTH_PASSWORD
+    )
 
 
 def authenticate():
     """Send 401 response for authentication."""
     return Response(
-        'Authentication required',
-        401,
-        {'WWW-Authenticate': 'Basic realm="Vibes"'}
+        "Authentication required", 401, {"WWW-Authenticate": 'Basic realm="Vibes"'}
     )
 
 
 def requires_auth(f):
     """Decorator for routes that require authentication."""
+
     @wraps(f)
     def decorated(*args, **kwargs):
         if AUTH_USERNAME and AUTH_PASSWORD:
@@ -173,6 +203,7 @@ def requires_auth(f):
             if not auth or not check_auth(auth.username, auth.password):
                 return authenticate()
         return f(*args, **kwargs)
+
     return decorated
 
 
@@ -200,14 +231,15 @@ def init_app(project_dir: str, projects_root: str = None):
 # Static Files
 # ===========================================
 
-@app.route('/')
+
+@app.route("/")
 @requires_auth
 def index():
     """Serve the main UI."""
-    return send_from_directory(STATIC_DIR, 'index.html')
+    return send_from_directory(STATIC_DIR, "index.html")
 
 
-@app.route('/<path:path>')
+@app.route("/<path:path>")
 @requires_auth
 def static_files(path):
     """Serve static files."""
@@ -216,14 +248,15 @@ def static_files(path):
     if file_path.exists():
         return send_from_directory(STATIC_DIR, path)
     # SPA fallback - serve index.html for client-side routing
-    return send_from_directory(STATIC_DIR, 'index.html')
+    return send_from_directory(STATIC_DIR, "index.html")
 
 
 # ===========================================
 # Board API
 # ===========================================
 
-@app.route('/api/board')
+
+@app.route("/api/board")
 @requires_auth
 def get_board():
     """Get the Kanban board state."""
@@ -233,22 +266,19 @@ def get_board():
     beads = _bead_store.load_all()
 
     # Group by status
-    board = {
-        "todo": [],
-        "in_progress": [],
-        "review": [],
-        "done": []
-    }
+    board = {"todo": [], "in_progress": [], "review": [], "done": []}
 
     status_map = {
         "pending": "todo",
         "in_progress": "in_progress",
         "needs_review": "review",
-        "passing": "done"
+        "passing": "done",
     }
 
     for bead in beads:
-        status = bead.status.value if isinstance(bead.status, BeadStatus) else bead.status
+        status = (
+            bead.status.value if isinstance(bead.status, BeadStatus) else bead.status
+        )
         column = status_map.get(status, "todo")
         board[column].append(bead.to_feature_dict())
 
@@ -256,13 +286,10 @@ def get_board():
     for column in board.values():
         column.sort(key=lambda x: x.get("priority", 0), reverse=True)
 
-    return jsonify({
-        "board": board,
-        "stats": _bead_store.get_stats()
-    })
+    return jsonify({"board": board, "stats": _bead_store.get_stats()})
 
 
-@app.route('/api/task', methods=['POST'])
+@app.route("/api/task", methods=["POST"])
 @requires_auth
 def create_task():
     """Create a new task."""
@@ -274,20 +301,18 @@ def create_task():
         name=data.get("name", "Untitled"),
         description=data.get("description", ""),
         test_cases=data.get("test_cases", []),
-        priority=data.get("priority", 0)
+        priority=data.get("priority", 0),
     )
 
     # Broadcast update to all clients
     broadcast_board_update()
 
-    return jsonify({
-        "success": True,
-        "bead_id": bead.id,
-        "task": bead.to_feature_dict()
-    })
+    return jsonify(
+        {"success": True, "bead_id": bead.id, "task": bead.to_feature_dict()}
+    )
 
 
-@app.route('/api/task/<task_id>')
+@app.route("/api/task/<task_id>")
 @requires_auth
 def get_task(task_id):
     """Get a specific task."""
@@ -301,7 +326,7 @@ def get_task(task_id):
     return jsonify(bead.to_feature_dict())
 
 
-@app.route('/api/task/<task_id>/move', methods=['POST'])
+@app.route("/api/task/<task_id>/move", methods=["POST"])
 @requires_auth
 def move_task(task_id):
     """Move a task to a different column."""
@@ -322,15 +347,17 @@ def move_task(task_id):
     # Broadcast update to all clients
     broadcast_board_update()
 
-    return jsonify({
-        "success": True,
-        "bead_id": task_id,
-        "old_status": old_status,
-        "new_status": new_status
-    })
+    return jsonify(
+        {
+            "success": True,
+            "bead_id": task_id,
+            "old_status": old_status,
+            "new_status": new_status,
+        }
+    )
 
 
-@app.route('/api/task/<task_id>', methods=['DELETE'])
+@app.route("/api/task/<task_id>", methods=["DELETE"])
 @requires_auth
 def delete_task(task_id):
     """Delete a task."""
@@ -345,7 +372,7 @@ def delete_task(task_id):
     return jsonify(result)
 
 
-@app.route('/api/task/<task_id>/decompose', methods=['POST'])
+@app.route("/api/task/<task_id>/decompose", methods=["POST"])
 @requires_auth
 def decompose_existing_task(task_id):
     """Decompose an existing task into subtasks."""
@@ -361,64 +388,70 @@ def decompose_existing_task(task_id):
 
     # Check if task is too small to decompose
     size = estimate_task_size(bead.description or bead.name)
-    if size == 'atomic' and not data.get("force"):
-        return jsonify({
-            "success": False,
-            "reason": "Task appears atomic - doesn't need decomposition",
-            "size": size
-        })
+    if size == "atomic" and not data.get("force"):
+        return jsonify(
+            {
+                "success": False,
+                "reason": "Task appears atomic - doesn't need decomposition",
+                "size": size,
+            }
+        )
 
     # Decompose using Claude
     subtasks = decompose_task(
         task_name=bead.name,
         task_description=bead.description or "",
         context=context,
-        project_dir=str(_project_dir)
+        project_dir=str(_project_dir),
     )
 
     if not subtasks:
         # Fallback to quick decomposition
         quick_tasks = quick_decompose(bead.description or bead.name)
-        return jsonify({
-            "success": True,
-            "method": "quick",
-            "subtasks": quick_tasks,
-            "parent_task_id": task_id
-        })
+        return jsonify(
+            {
+                "success": True,
+                "method": "quick",
+                "subtasks": quick_tasks,
+                "parent_task_id": task_id,
+            }
+        )
 
     # Create subtasks as new beads
     created_beads = []
     for subtask in subtasks:
         new_bead = _mayor.create_bead(
             name=f"[{bead.name[:20]}] {subtask.name}",
-            description=f"{subtask.description}\n\n**Acceptance Criteria:**\n" +
-                       "\n".join(f"- {c}" for c in subtask.acceptance_criteria),
+            description=f"{subtask.description}\n\n**Acceptance Criteria:**\n"
+            + "\n".join(f"- {c}" for c in subtask.acceptance_criteria),
             test_cases=subtask.test_cases,
-            priority=bead.priority
+            priority=bead.priority,
         )
-        created_beads.append({
-            "id": new_bead.id,
-            "name": new_bead.name,
-            "order": subtask.order
-        })
+        created_beads.append(
+            {"id": new_bead.id, "name": new_bead.name, "order": subtask.order}
+        )
 
     # Mark original task as decomposed (move to done or delete based on preference)
-    bead.description = f"**DECOMPOSED** into {len(created_beads)} subtasks\n\n" + (bead.description or "")
+    bead.description = f"**DECOMPOSED** into {len(created_beads)} subtasks\n\n" + (
+        bead.description or ""
+    )
     _bead_store.save(bead, f"Decomposed: {bead.name}")
 
     # Broadcast update
     broadcast_board_update()
 
-    return jsonify({
-        "success": True,
-        "method": "claude",
-        "subtasks": [s.to_dict() for s in subtasks],
-        "created_beads": created_beads,
-        "parent_task_id": task_id
-    })
+    return jsonify(
+        {
+            "success": True,
+            "method": "claude",
+            "subtasks": [s.to_dict() for s in subtasks],
+            "created_beads": created_beads,
+            "parent_task_id": task_id,
+        }
+    )
 
 
-@app.route('/api/decompose', methods=['POST'])
+@app.route("/api/decompose", methods=["POST"])
 @requires_auth
 def decompose_new_task():
     """Decompose a task description into subtasks without creating beads."""
@@ -442,17 +475,14 @@ def decompose_new_task():
         task_name=task_name or "Unnamed Task",
         task_description=task_description,
         context=context,
-        project_dir=str(_project_dir)
+        project_dir=str(_project_dir),
     )
 
     if not subtasks:
         quick_tasks = quick_decompose(task_description or task_name)
-        return jsonify({
-            "success": True,
-            "method": "quick",
-            "size": size,
-            "subtasks": quick_tasks
-        })
+        return jsonify(
+            {"success": True, "method": "quick", "size": size, "subtasks": quick_tasks}
+        )
 
     # Optionally create beads
     created_beads = []
@@ -460,29 +490,29 @@ def decompose_new_task():
         for subtask in subtasks:
             new_bead = _mayor.create_bead(
                 name=subtask.name,
-                description=f"{subtask.description}\n\n**Acceptance Criteria:**\n" +
-                           "\n".join(f"- {c}" for c in subtask.acceptance_criteria),
+                description=f"{subtask.description}\n\n**Acceptance Criteria:**\n"
+                + "\n".join(f"- {c}" for c in subtask.acceptance_criteria),
                 test_cases=subtask.test_cases,
-                priority=0
+                priority=0,
             )
-            created_beads.append({
-                "id": new_bead.id,
-                "name": new_bead.name,
-                "order": subtask.order
-            })
+            created_beads.append(
+                {"id": new_bead.id, "name": new_bead.name, "order": subtask.order}
+            )
         broadcast_board_update()
 
-    return jsonify({
-        "success": True,
-        "method": "claude",
-        "size": size,
-        "subtasks": [s.to_dict() for s in subtasks],
-        "created_beads": created_beads if create_beads else None,
-        "markdown": format_subtasks_as_markdown(subtasks)
-    })
+    return jsonify(
+        {
+            "success": True,
+            "method": "claude",
+            "size": size,
+            "subtasks": [s.to_dict() for s in subtasks],
+            "created_beads": created_beads if create_beads else None,
+            "markdown": format_subtasks_as_markdown(subtasks),
+        }
+    )
 
 
-@app.route('/api/autowork', methods=['POST'])
+@app.route("/api/autowork", methods=["POST"])
 @requires_auth
 def start_autowork():
     """Start autonomous work mode - Claude works through all tasks automatically."""
@@ -490,7 +520,9 @@ def start_autowork():
         return jsonify({"error": "Not initialized"}), 500
 
     data = request.json or {}
-    parallel_agents = data.get("parallel_agents", 1)  # Number of parallel agents to spawn
+    parallel_agents = data.get(
+        "parallel_agents", 1
+    )  # Number of parallel agents to spawn
 
     # Run autonomous Claude in background
     import threading
@@ -504,16 +536,19 @@ def start_autowork():
     thread = threading.Thread(target=run_autonomous, daemon=True)
     thread.start()
 
-    return jsonify({
-        "success": True,
-        "message": f"Autonomous mode started with {parallel_agents} agent(s)",
-        "parallel_agents": parallel_agents
-    })
+    return jsonify(
+        {
+            "success": True,
+            "message": f"Autonomous mode started with {parallel_agents} agent(s)",
+            "parallel_agents": parallel_agents,
+        }
+    )
 
 
 # ===========================================
 # Session & Projects API
 # ===========================================
+
 
 def get_session_file() -> Path:
     """Get path to session state file."""
@@ -542,7 +577,7 @@ def save_session(data: dict):
         session_file.write_text(json.dumps(data, indent=2))
 
 
-@app.route('/api/session/ping', methods=['POST'])
+@app.route("/api/session/ping", methods=["POST"])
 @requires_auth
 def session_ping():
     """Record activity and return session summary if returning after inactivity."""
@@ -568,10 +603,7 @@ def session_ping():
     if hours_inactive >= 2:
         summary = generate_session_summary(hours_inactive)
 
-    return jsonify({
-        "hours_inactive": round(hours_inactive, 1),
-        "summary": summary
-    })
+    return jsonify({"hours_inactive": round(hours_inactive, 1), "summary": summary})
 
 
 def generate_session_summary(hours_inactive: float) -> str:
@@ -584,10 +616,16 @@ def generate_session_summary(hours_inactive: float) -> str:
         stats = _bead_store.get_stats()
         beads = _bead_store.load_all()
 
-        lines.append(f"**Board Status:** {stats['passing']}/{stats['total']} tasks complete")
+        lines.append(
+            f"**Board Status:** {stats['passing']}/{stats['total']} tasks complete"
+        )
 
         # In progress
-        active = [b for b in beads if str(b.status) in ["in_progress", "BeadStatus.IN_PROGRESS"]]
+        active = [
+            b
+            for b in beads
+            if str(b.status) in ["in_progress", "BeadStatus.IN_PROGRESS"]
+        ]
         if active:
             lines.append("")
             lines.append("**In Progress:**")
@@ -595,7 +633,11 @@ def generate_session_summary(hours_inactive: float) -> str:
                 lines.append(f"- {b.name}")
 
         # Needs review
-        review = [b for b in beads if str(b.status) in ["needs_review", "BeadStatus.NEEDS_REVIEW"]]
+        review = [
+            b
+            for b in beads
+            if str(b.status) in ["needs_review", "BeadStatus.NEEDS_REVIEW"]
+        ]
         if review:
             lines.append("")
             lines.append("**Needs Review:**")
@@ -611,13 +653,17 @@ def generate_session_summary(hours_inactive: float) -> str:
             lines.append("**Last conversation:**")
             for msg in recent:
                 role = "You" if msg["role"] == "user" else "Claude"
-                content = msg["content"][:100] + "..." if len(msg["content"]) > 100 else msg["content"]
+                content = (
+                    msg["content"][:100] + "..."
+                    if len(msg["content"]) > 100
+                    else msg["content"]
+                )
                 lines.append(f"- {role}: {content}")
 
     return "\n".join(lines)
 
 
-@app.route('/api/projects')
+@app.route("/api/projects")
 @requires_auth
 def list_projects():
     """List available projects."""
@@ -625,26 +671,20 @@ def list_projects():
 
     # Current project
     if _project_dir:
-        projects.append({
-            "name": _project_dir.name,
-            "path": str(_project_dir),
-            "current": True
-        })
+        projects.append(
+            {"name": _project_dir.name, "path": str(_project_dir), "current": True}
+        )
 
     # Look for other projects in projects root
     if _projects_root and _projects_root.exists():
         for p in _projects_root.iterdir():
             if p.is_dir() and (p / ".git").exists() and p != _project_dir:
-                projects.append({
-                    "name": p.name,
-                    "path": str(p),
-                    "current": False
-                })
+                projects.append({"name": p.name, "path": str(p), "current": False})
 
     return jsonify({"projects": projects})
 
 
-@app.route('/api/projects/switch', methods=['POST'])
+@app.route("/api/projects/switch", methods=["POST"])
 @requires_auth
 def switch_project():
     """Switch to a different project."""
@@ -665,16 +705,15 @@ def switch_project():
     _bead_store = BeadStore(_project_dir, auto_commit=True)
     _mayor = Mayor(_project_dir)
 
-    return jsonify({
-        "success": True,
-        "project": _project_dir.name,
-        "path": str(_project_dir)
-    })
+    return jsonify(
+        {"success": True, "project": _project_dir.name, "path": str(_project_dir)}
+    )
 
 
 # ===========================================
 # Chat API (Claude Integration)
 # ===========================================
+
 
 def get_chat_file() -> Path:
     """Get path to chat history file."""
@@ -703,7 +742,7 @@ def save_chat_history(messages: list):
         chat_file.write_text(json.dumps(messages, indent=2))
 
 
-@app.route('/api/chat/history')
+@app.route("/api/chat/history")
 @requires_auth
 def get_chat_history():
     """Get chat history."""
@@ -711,7 +750,7 @@ def get_chat_history():
     return jsonify({"messages": messages})
 
 
-@app.route('/api/chat/history', methods=['DELETE'])
+@app.route("/api/chat/history", methods=["DELETE"])
 @requires_auth
 def clear_chat_history():
     """Clear chat history."""
@@ -719,7 +758,7 @@ def clear_chat_history():
     return jsonify({"success": True})
 
 
-@app.route('/api/chat/stop', methods=['POST'])
+@app.route("/api/chat/stop", methods=["POST"])
 @requires_auth
 def stop_chat():
     """Stop the current Claude generation."""
@@ -735,23 +774,25 @@ def stop_chat():
         return jsonify({"success": True, "message": "No active process"})
 
 
-@app.route('/api/logs')
+@app.route("/api/logs")
 @requires_auth
 def get_claude_logs():
     """Get Claude debug logs - memory efficient version."""
     from pathlib import Path
 
-    filter_type = request.args.get('filter', 'all')
-    limit = min(int(request.args.get('limit', 200)), 500)  # Cap at 500
+    filter_type = request.args.get("filter", "all")
+    limit = min(int(request.args.get("limit", 200)), 500)  # Cap at 500
 
-    debug_dir = Path.home() / '.claude' / 'debug'
+    debug_dir = Path.home() / ".claude" / "debug"
     logs = []
 
     if not debug_dir.exists():
         return jsonify({"logs": []})
 
     try:
-        debug_files = sorted(debug_dir.glob('*.txt'), key=lambda f: f.stat().st_mtime, reverse=True)[:3]
+        debug_files = sorted(
+            debug_dir.glob("*.txt"), key=lambda f: f.stat().st_mtime, reverse=True
+        )[:3]
     except Exception:
         return jsonify({"logs": []})
 
@@ -760,7 +801,7 @@ def get_claude_logs():
             break
         try:
             # Read line by line to avoid loading entire file
-            with open(debug_file, 'r') as f:
+            with open(debug_file, "r") as f:
                 for line in f:
                     line = line.strip()
                     if not line:
@@ -776,47 +817,55 @@ def get_claude_logs():
                     msg_lower = message.lower()
 
                     # Categorize by content
-                    if 'error' in level or 'statsig' in msg_lower or 'gate' in msg_lower:
-                        source = 'system'
+                    if (
+                        "error" in level
+                        or "statsig" in msg_lower
+                        or "gate" in msg_lower
+                    ):
+                        source = "system"
                     else:
-                        source = 'claude'
+                        source = "claude"
 
                     # Apply filter
-                    if filter_type == 'error' and level != 'error':
+                    if filter_type == "error" and level != "error":
                         continue
-                    elif filter_type == 'claude' and source != 'claude':
+                    elif filter_type == "claude" and source != "claude":
                         continue
-                    elif filter_type == 'system' and source != 'system':
+                    elif filter_type == "system" and source != "system":
                         continue
 
-                    logs.append({
-                        'id': f"{debug_file.stem}_{len(logs)}",
-                        'timestamp': timestamp,
-                        'level': level if level in ('info', 'warn', 'error', 'debug') else 'info',
-                        'source': source,
-                        'message': message[:500]
-                    })
+                    logs.append(
+                        {
+                            "id": f"{debug_file.stem}_{len(logs)}",
+                            "timestamp": timestamp,
+                            "level": level
+                            if level in ("info", "warn", "error", "debug")
+                            else "info",
+                            "source": source,
+                            "message": message[:500],
+                        }
+                    )
         except Exception:
             continue
 
     # Sort by timestamp and limit
-    logs.sort(key=lambda x: x['timestamp'], reverse=True)
+    logs.sort(key=lambda x: x["timestamp"], reverse=True)
     logs = logs[:limit]
     logs.reverse()  # Oldest first for display
 
     return jsonify({"logs": logs})
 
 
-@app.route('/api/logs', methods=['DELETE'])
+@app.route("/api/logs", methods=["DELETE"])
 @requires_auth
 def clear_claude_logs():
     """Clear Claude debug logs."""
     from pathlib import Path
 
-    debug_dir = Path.home() / '.claude' / 'debug'
+    debug_dir = Path.home() / ".claude" / "debug"
 
     if debug_dir.exists():
-        for debug_file in debug_dir.glob('*.txt'):
+        for debug_file in debug_dir.glob("*.txt"):
             try:
                 debug_file.unlink()
             except Exception as e:
@@ -825,7 +874,7 @@ def clear_claude_logs():
     return jsonify({"success": True})
 
 
-@app.route('/api/git/branch')
+@app.route("/api/git/branch")
 @requires_auth
 def get_branch():
     """Get current git branch."""
@@ -837,7 +886,7 @@ def get_branch():
             ["git", "branch", "--show-current"],
             capture_output=True,
             text=True,
-            cwd=str(_project_dir)
+            cwd=str(_project_dir),
         )
         branch = result.stdout.strip() or "main"
         return jsonify({"branch": branch})
@@ -845,7 +894,7 @@ def get_branch():
         return jsonify({"branch": "main"})
 
 
-@app.route('/api/chat', methods=['POST'])
+@app.route("/api/chat", methods=["POST"])
 @requires_auth
 def chat():
     """Send a message to Claude."""
@@ -859,25 +908,27 @@ def chat():
     history = load_chat_history()
 
     # Add user message
-    history.append({
-        "role": "user",
-        "content": message,
-        "timestamp": datetime.now().isoformat()
-    })
+    history.append(
+        {"role": "user", "content": message, "timestamp": datetime.now().isoformat()}
+    )
 
     # Build context from current board state
     context = build_chat_context()
 
     # Run Claude CLI with the message and history
     try:
-        response = run_claude_prompt(message, context, history[:-1])  # Pass history excluding current message
+        response = run_claude_prompt(
+            message, context, history[:-1]
+        )  # Pass history excluding current message
 
         # Add assistant response
-        history.append({
-            "role": "assistant",
-            "content": response,
-            "timestamp": datetime.now().isoformat()
-        })
+        history.append(
+            {
+                "role": "assistant",
+                "content": response,
+                "timestamp": datetime.now().isoformat(),
+            }
+        )
 
         # Save history (keep last 100 messages)
         save_chat_history(history[-100:])
@@ -902,7 +953,7 @@ def build_chat_context() -> str:
         f"Pending: {stats['pending']}",
         f"Needs Review: {stats['needs_review']}",
         f"Complete: {stats['passing']}",
-        ""
+        "",
     ]
 
     # List in-progress and pending tasks
@@ -935,7 +986,7 @@ def run_claude_prompt(message: str, context: str, history: list = None) -> str:
         history_lines = []
         for msg in recent:
             role = "User" if msg["role"] == "user" else "Assistant"
-            content = msg['content']
+            content = msg["content"]
             # Truncate long messages to 300 chars
             if len(content) > 300:
                 content = content[:300] + "..."
@@ -954,7 +1005,8 @@ Respond helpfully and concisely."""
     try:
         # Write prompt to temp file to avoid shell escaping issues
         import tempfile
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
             f.write(full_prompt)
             prompt_file = f.name
         os.chmod(prompt_file, 0o644)  # Make readable by vibes user
@@ -973,7 +1025,7 @@ Respond helpfully and concisely."""
             text=True,
             cwd=str(_project_dir),
             env={**os.environ, "HOME": "/home/vibes"},
-            shell=True
+            shell=True,
         )
 
         try:
@@ -1017,7 +1069,9 @@ def run_autonomous_claude(parallel_agents: int = 1):
     current_task_name = "Autonomous work"
     if _bead_store:
         beads = _bead_store.load_all()
-        pending = [b for b in beads if str(b.status) in ["pending", "BeadStatus.PENDING"]]
+        pending = [
+            b for b in beads if str(b.status) in ["pending", "BeadStatus.PENDING"]
+        ]
         if pending:
             current_task_id = pending[0].id
             current_task_name = pending[0].name
@@ -1028,16 +1082,20 @@ def run_autonomous_claude(parallel_agents: int = 1):
 
     # Add starting message to chat immediately
     history = load_chat_history()
-    history.append({
-        "role": "user",
-        "content": f"[AUTO] Start autonomous mode with {parallel_agents} parallel agent(s)",
-        "timestamp": datetime.now().isoformat()
-    })
-    history.append({
-        "role": "assistant",
-        "content": f"🤖 **Autonomous mode activated!**\n\nI'm checking the kanban board and will work through all pending tasks.\n\n*Working with {parallel_agents} parallel agent(s)...*",
-        "timestamp": datetime.now().isoformat()
-    })
+    history.append(
+        {
+            "role": "user",
+            "content": f"[AUTO] Start autonomous mode with {parallel_agents} parallel agent(s)",
+            "timestamp": datetime.now().isoformat(),
+        }
+    )
+    history.append(
+        {
+            "role": "assistant",
+            "content": f"🤖 **Autonomous mode activated!**\n\nI'm checking the kanban board and will work through all pending tasks.\n\n*Working with {parallel_agents} parallel agent(s)...*",
+            "timestamp": datetime.now().isoformat(),
+        }
+    )
     save_chat_history(history[-100:])
 
     # Build the autonomous prompt
@@ -1047,7 +1105,7 @@ def run_autonomous_claude(parallel_agents: int = 1):
         prompt += f"\n\n## PARALLEL MODE: Spawn up to {parallel_agents} subagents to work on tasks concurrently."
 
     # Write prompt to temp file
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
         f.write(prompt)
         prompt_file = f.name
     os.chmod(prompt_file, 0o644)
@@ -1068,7 +1126,7 @@ def run_autonomous_claude(parallel_agents: int = 1):
             cwd=str(_project_dir),
             env={**os.environ, "HOME": "/home/vibes"},
             shell=True,
-            bufsize=1  # Line buffered
+            bufsize=1,  # Line buffered
         )
 
         # Stream output and update chat/progress periodically
@@ -1079,21 +1137,24 @@ def run_autonomous_claude(parallel_agents: int = 1):
         stage_check_interval = 3  # Check for stage changes every 3 seconds
         last_detected_stage = None
 
-        for line in iter(process.stdout.readline, ''):
+        for line in iter(process.stdout.readline, ""):
             output_lines.append(line)
             print(f"[autowork] {line.rstrip()}")
 
             # Check for stage changes in output
-            if current_task_id and time.time() - last_stage_check > stage_check_interval:
+            if (
+                current_task_id
+                and time.time() - last_stage_check > stage_check_interval
+            ):
                 last_stage_check = time.time()
-                recent_output = ''.join(output_lines[-10:])
+                recent_output = "".join(output_lines[-10:])
                 detected_stage = detect_stage_from_output(recent_output)
                 if detected_stage and detected_stage != last_detected_stage:
                     last_detected_stage = detected_stage
                     progress_tracker.update_stage(
                         current_task_id,
                         detected_stage,
-                        line.strip()[:100]  # Use current line as message
+                        line.strip()[:100],  # Use current line as message
                     )
 
             # Periodic update to chat
@@ -1101,16 +1162,18 @@ def run_autonomous_claude(parallel_agents: int = 1):
                 last_update = time.time()
                 # Add progress update to chat
                 history = load_chat_history()
-                progress_text = ''.join(output_lines[-20:])  # Last 20 lines
-                history.append({
-                    "role": "assistant",
-                    "content": f"📝 **Progress update:**\n```\n{progress_text[-1000:]}\n```",
-                    "timestamp": datetime.now().isoformat()
-                })
+                progress_text = "".join(output_lines[-20:])  # Last 20 lines
+                history.append(
+                    {
+                        "role": "assistant",
+                        "content": f"📝 **Progress update:**\n```\n{progress_text[-1000:]}\n```",
+                        "timestamp": datetime.now().isoformat(),
+                    }
+                )
                 save_chat_history(history[-100:])
 
         process.wait(timeout=600)
-        stdout = ''.join(output_lines)
+        stdout = "".join(output_lines)
 
         if process.returncode == 0:
             print(f"[autowork] Completed successfully")
@@ -1124,11 +1187,13 @@ def run_autonomous_claude(parallel_agents: int = 1):
 
             # Save final output to chat history
             history = load_chat_history()
-            history.append({
-                "role": "assistant",
-                "content": f"✅ **Autonomous work complete!**\n\n📋 **Retro:** {retro}\n\n{stdout[-1500:] if len(stdout) > 1500 else stdout}",
-                "timestamp": datetime.now().isoformat()
-            })
+            history.append(
+                {
+                    "role": "assistant",
+                    "content": f"✅ **Autonomous work complete!**\n\n📋 **Retro:** {retro}\n\n{stdout[-1500:] if len(stdout) > 1500 else stdout}",
+                    "timestamp": datetime.now().isoformat(),
+                }
+            )
             save_chat_history(history[-100:])
 
             # Broadcast board update
@@ -1138,34 +1203,42 @@ def run_autonomous_claude(parallel_agents: int = 1):
 
             # Mark progress as failed
             if current_task_id:
-                progress_tracker.fail_task(current_task_id, f"Exit code: {process.returncode}")
+                progress_tracker.fail_task(
+                    current_task_id, f"Exit code: {process.returncode}"
+                )
 
             history = load_chat_history()
-            history.append({
-                "role": "assistant",
-                "content": f"❌ **Autonomous work failed**\n\nError code: {process.returncode}\n\n```\n{stdout[-1000:]}\n```",
-                "timestamp": datetime.now().isoformat()
-            })
+            history.append(
+                {
+                    "role": "assistant",
+                    "content": f"❌ **Autonomous work failed**\n\nError code: {process.returncode}\n\n```\n{stdout[-1000:]}\n```",
+                    "timestamp": datetime.now().isoformat(),
+                }
+            )
             save_chat_history(history[-100:])
 
     except subprocess.TimeoutExpired:
         process.kill()
         print("[autowork] Timed out after 10 minutes")
         history = load_chat_history()
-        history.append({
-            "role": "assistant",
-            "content": "⏱️ **Autonomous work timed out** after 10 minutes. Check the board for progress.",
-            "timestamp": datetime.now().isoformat()
-        })
+        history.append(
+            {
+                "role": "assistant",
+                "content": "⏱️ **Autonomous work timed out** after 10 minutes. Check the board for progress.",
+                "timestamp": datetime.now().isoformat(),
+            }
+        )
         save_chat_history(history[-100:])
     except Exception as e:
         print(f"[autowork] Exception: {e}")
         history = load_chat_history()
-        history.append({
-            "role": "assistant",
-            "content": f"❌ **Error:** {str(e)}",
-            "timestamp": datetime.now().isoformat()
-        })
+        history.append(
+            {
+                "role": "assistant",
+                "content": f"❌ **Error:** {str(e)}",
+                "timestamp": datetime.now().isoformat(),
+            }
+        )
         save_chat_history(history[-100:])
     finally:
         try:
@@ -1177,6 +1250,7 @@ def run_autonomous_claude(parallel_agents: int = 1):
 # ===========================================
 # Claude Settings API (MCP, Skills, Agents)
 # ===========================================
+
 
 def get_claude_settings_paths() -> dict:
     """Get paths to Claude settings files."""
@@ -1231,7 +1305,7 @@ def load_mcp_servers_file() -> dict:
     return {}
 
 
-@app.route('/api/claude/mcp')
+@app.route("/api/claude/mcp")
 @requires_auth
 def get_mcp_servers():
     """Get configured MCP servers."""
@@ -1245,44 +1319,50 @@ def get_mcp_servers():
     # MCP servers from dedicated mcp_servers.json (Claude Code's actual config)
     for name, config in mcp_file_servers.items():
         if name not in seen_names:
-            servers.append({
-                "name": name,
-                "scope": "global",
-                "command": config.get("command", ""),
-                "args": config.get("args", []),
-                "description": config.get("description", ""),
-                "enabled": not config.get("disabled", False)
-            })
+            servers.append(
+                {
+                    "name": name,
+                    "scope": "global",
+                    "command": config.get("command", ""),
+                    "args": config.get("args", []),
+                    "description": config.get("description", ""),
+                    "enabled": not config.get("disabled", False),
+                }
+            )
             seen_names.add(name)
 
     # Global MCP servers from settings.json
     for name, config in global_settings.get("mcpServers", {}).items():
         if name not in seen_names:
-            servers.append({
-                "name": name,
-                "scope": "global",
-                "command": config.get("command", ""),
-                "args": config.get("args", []),
-                "enabled": not config.get("disabled", False)
-            })
+            servers.append(
+                {
+                    "name": name,
+                    "scope": "global",
+                    "command": config.get("command", ""),
+                    "args": config.get("args", []),
+                    "enabled": not config.get("disabled", False),
+                }
+            )
             seen_names.add(name)
 
     # Project MCP servers
     for name, config in project_settings.get("mcpServers", {}).items():
         if name not in seen_names:
-            servers.append({
-                "name": name,
-                "scope": "project",
-                "command": config.get("command", ""),
-                "args": config.get("args", []),
-                "enabled": not config.get("disabled", False)
-            })
+            servers.append(
+                {
+                    "name": name,
+                    "scope": "project",
+                    "command": config.get("command", ""),
+                    "args": config.get("args", []),
+                    "enabled": not config.get("disabled", False),
+                }
+            )
             seen_names.add(name)
 
     return jsonify({"servers": servers})
 
 
-@app.route('/api/claude/mcp', methods=['POST'])
+@app.route("/api/claude/mcp", methods=["POST"])
 @requires_auth
 def add_mcp_server():
     """Add a new MCP server."""
@@ -1299,16 +1379,13 @@ def add_mcp_server():
     if "mcpServers" not in settings:
         settings["mcpServers"] = {}
 
-    settings["mcpServers"][name] = {
-        "command": command,
-        "args": args
-    }
+    settings["mcpServers"][name] = {"command": command, "args": args}
 
     save_claude_settings(settings, scope)
     return jsonify({"success": True, "name": name})
 
 
-@app.route('/api/claude/mcp/<name>/toggle', methods=['POST'])
+@app.route("/api/claude/mcp/<name>/toggle", methods=["POST"])
 @requires_auth
 def toggle_mcp_server(name):
     """Toggle an MCP server on/off."""
@@ -1328,7 +1405,7 @@ def toggle_mcp_server(name):
     return jsonify({"error": "Server not found"}), 404
 
 
-@app.route('/api/claude/mcp/<name>', methods=['GET'])
+@app.route("/api/claude/mcp/<name>", methods=["GET"])
 @requires_auth
 def get_mcp_server(name):
     """Get a single MCP server's details."""
@@ -1338,19 +1415,21 @@ def get_mcp_server(name):
     settings = load_claude_settings(scope)
     if "mcpServers" in settings and name in settings["mcpServers"]:
         config = settings["mcpServers"][name]
-        return jsonify({
-            "name": name,
-            "scope": scope,
-            "command": config.get("command", ""),
-            "args": config.get("args", []),
-            "env": config.get("env", {}),
-            "enabled": not config.get("disabled", False)
-        })
+        return jsonify(
+            {
+                "name": name,
+                "scope": scope,
+                "command": config.get("command", ""),
+                "args": config.get("args", []),
+                "env": config.get("env", {}),
+                "enabled": not config.get("disabled", False),
+            }
+        )
 
     return jsonify({"error": "Server not found"}), 404
 
 
-@app.route('/api/claude/mcp/<name>', methods=['PUT'])
+@app.route("/api/claude/mcp/<name>", methods=["PUT"])
 @requires_auth
 def update_mcp_server(name):
     """Update an MCP server."""
@@ -1386,7 +1465,7 @@ def update_mcp_server(name):
     return jsonify({"success": True, "name": new_name})
 
 
-@app.route('/api/claude/mcp/<name>', methods=['DELETE'])
+@app.route("/api/claude/mcp/<name>", methods=["DELETE"])
 @requires_auth
 def delete_mcp_server(name):
     """Delete an MCP server."""
@@ -1402,7 +1481,7 @@ def delete_mcp_server(name):
     return jsonify({"error": "Server not found"}), 404
 
 
-@app.route('/api/claude/skills')
+@app.route("/api/claude/skills")
 @requires_auth
 def get_skills():
     """Get available skills."""
@@ -1410,7 +1489,10 @@ def get_skills():
     skills = []
 
     # Check both global and project skills directories
-    for scope, skills_dir in [("global", paths["skills_global"]), ("project", paths["skills_project"])]:
+    for scope, skills_dir in [
+        ("global", paths["skills_global"]),
+        ("project", paths["skills_project"]),
+    ]:
         if skills_dir and skills_dir.exists():
             for skill_file in skills_dir.rglob("*.md"):
                 try:
@@ -1422,27 +1504,30 @@ def get_skills():
                         parts = content.split("---", 2)
                         if len(parts) >= 3:
                             import re
-                            name_match = re.search(r'name:\s*(.+)', parts[1])
-                            desc_match = re.search(r'description:\s*(.+)', parts[1])
+
+                            name_match = re.search(r"name:\s*(.+)", parts[1])
+                            desc_match = re.search(r"description:\s*(.+)", parts[1])
                             if name_match:
                                 name = name_match.group(1).strip()
                             if desc_match:
                                 description = desc_match.group(1).strip()
 
-                    skills.append({
-                        "name": name,
-                        "file": str(skill_file),
-                        "scope": scope,
-                        "description": description,
-                        "enabled": True  # Skills are always enabled if they exist
-                    })
+                    skills.append(
+                        {
+                            "name": name,
+                            "file": str(skill_file),
+                            "scope": scope,
+                            "description": description,
+                            "enabled": True,  # Skills are always enabled if they exist
+                        }
+                    )
                 except:
                     pass
 
     return jsonify({"skills": skills})
 
 
-@app.route('/api/claude/skills', methods=['POST'])
+@app.route("/api/claude/skills", methods=["POST"])
 @requires_auth
 def create_skill():
     """Create a new skill."""
@@ -1487,7 +1572,7 @@ Verify the solution works as expected.
     return jsonify({"success": True, "file": str(skill_file)})
 
 
-@app.route('/api/claude/skills/<path:file_path>')
+@app.route("/api/claude/skills/<path:file_path>")
 @requires_auth
 def get_skill_content(file_path):
     """Get skill file content."""
@@ -1500,7 +1585,7 @@ def get_skill_content(file_path):
         return jsonify({"error": "Invalid path"}), 400
 
 
-@app.route('/api/claude/skills/<path:file_path>', methods=['PUT'])
+@app.route("/api/claude/skills/<path:file_path>", methods=["PUT"])
 @requires_auth
 def update_skill(file_path):
     """Update a skill file."""
@@ -1520,7 +1605,7 @@ def update_skill(file_path):
         return jsonify({"error": str(e)}), 400
 
 
-@app.route('/api/claude/skills/<path:file_path>', methods=['DELETE'])
+@app.route("/api/claude/skills/<path:file_path>", methods=["DELETE"])
 @requires_auth
 def delete_skill(file_path):
     """Delete a skill file."""
@@ -1540,62 +1625,62 @@ CLAUDE_TOOLS = [
     {
         "name": "Read",
         "description": "Read files from filesystem",
-        "details": "Reads file contents by path. Supports reading images, PDFs, and Jupyter notebooks. Can specify line offset and limit for large files."
+        "details": "Reads file contents by path. Supports reading images, PDFs, and Jupyter notebooks. Can specify line offset and limit for large files.",
     },
     {
         "name": "Write",
         "description": "Write/create files",
-        "details": "Creates or overwrites files. Requires reading the file first if it exists. Use for creating new files or complete rewrites."
+        "details": "Creates or overwrites files. Requires reading the file first if it exists. Use for creating new files or complete rewrites.",
     },
     {
         "name": "Edit",
         "description": "Make targeted edits to files",
-        "details": "Performs exact string replacements in files. Use old_string to match existing content and new_string for replacement. Supports replace_all for multiple occurrences."
+        "details": "Performs exact string replacements in files. Use old_string to match existing content and new_string for replacement. Supports replace_all for multiple occurrences.",
     },
     {
         "name": "Bash",
         "description": "Execute shell commands",
-        "details": "Runs bash commands with optional timeout. Captures output. Use for git, npm, docker, and other CLI operations. Avoid for file operations (use Read/Write/Edit instead)."
+        "details": "Runs bash commands with optional timeout. Captures output. Use for git, npm, docker, and other CLI operations. Avoid for file operations (use Read/Write/Edit instead).",
     },
     {
         "name": "Glob",
         "description": "Find files by pattern",
-        "details": "Fast file pattern matching. Supports patterns like '**/*.js' or 'src/**/*.ts'. Returns file paths sorted by modification time."
+        "details": "Fast file pattern matching. Supports patterns like '**/*.js' or 'src/**/*.ts'. Returns file paths sorted by modification time.",
     },
     {
         "name": "Grep",
         "description": "Search file contents",
-        "details": "Powerful regex search using ripgrep. Supports glob patterns, file type filters, context lines, and multiple output modes."
+        "details": "Powerful regex search using ripgrep. Supports glob patterns, file type filters, context lines, and multiple output modes.",
     },
     {
         "name": "Task",
         "description": "Spawn sub-agents",
-        "details": "Launches specialized agents for complex tasks. Available types: Bash, Explore, Plan, general-purpose. Agents run autonomously and return results."
+        "details": "Launches specialized agents for complex tasks. Available types: Bash, Explore, Plan, general-purpose. Agents run autonomously and return results.",
     },
     {
         "name": "WebFetch",
         "description": "Fetch web content",
-        "details": "Fetches URL content and processes with AI. Converts HTML to markdown. Use for retrieving and analyzing web pages."
+        "details": "Fetches URL content and processes with AI. Converts HTML to markdown. Use for retrieving and analyzing web pages.",
     },
     {
         "name": "WebSearch",
         "description": "Search the web",
-        "details": "Performs web searches for up-to-date information. Returns search results with links. Use for current events and recent data beyond training cutoff."
+        "details": "Performs web searches for up-to-date information. Returns search results with links. Use for current events and recent data beyond training cutoff.",
     },
     {
         "name": "NotebookEdit",
         "description": "Edit Jupyter notebooks",
-        "details": "Edit cells in .ipynb files. Supports replace, insert, and delete modes. Can set cell type (code or markdown)."
+        "details": "Edit cells in .ipynb files. Supports replace, insert, and delete modes. Can set cell type (code or markdown).",
     },
     {
         "name": "TodoWrite",
         "description": "Track task progress",
-        "details": "Creates and manages structured task lists. Track progress with pending/in_progress/completed states. Use for complex multi-step tasks."
+        "details": "Creates and manages structured task lists. Track progress with pending/in_progress/completed states. Use for complex multi-step tasks.",
     },
 ]
 
 
-@app.route('/api/claude/tools')
+@app.route("/api/claude/tools")
 @requires_auth
 def get_tools():
     """Get Claude's built-in tools and their status."""
@@ -1609,18 +1694,22 @@ def get_tools():
 
     tools = []
     for tool in CLAUDE_TOOLS:
-        tools.append({
-            "name": tool["name"],
-            "description": tool["description"],
-            "details": tool.get("details", ""),
-            "enabled": tool["name"] not in all_denied,
-            "denied_in": "global" if tool["name"] in denied_global else ("project" if tool["name"] in denied_project else None)
-        })
+        tools.append(
+            {
+                "name": tool["name"],
+                "description": tool["description"],
+                "details": tool.get("details", ""),
+                "enabled": tool["name"] not in all_denied,
+                "denied_in": "global"
+                if tool["name"] in denied_global
+                else ("project" if tool["name"] in denied_project else None),
+            }
+        )
 
     return jsonify({"tools": tools})
 
 
-@app.route('/api/claude/tools/<name>')
+@app.route("/api/claude/tools/<name>")
 @requires_auth
 def get_tool_details(name):
     """Get detailed info about a specific tool."""
@@ -1631,18 +1720,22 @@ def get_tool_details(name):
             denied_global = set(global_settings.get("deniedTools", []))
             denied_project = set(project_settings.get("deniedTools", []))
 
-            return jsonify({
-                "name": tool["name"],
-                "description": tool["description"],
-                "details": tool.get("details", ""),
-                "enabled": tool["name"] not in (denied_global | denied_project),
-                "denied_in": "global" if tool["name"] in denied_global else ("project" if tool["name"] in denied_project else None)
-            })
+            return jsonify(
+                {
+                    "name": tool["name"],
+                    "description": tool["description"],
+                    "details": tool.get("details", ""),
+                    "enabled": tool["name"] not in (denied_global | denied_project),
+                    "denied_in": "global"
+                    if tool["name"] in denied_global
+                    else ("project" if tool["name"] in denied_project else None),
+                }
+            )
 
     return jsonify({"error": "Tool not found"}), 404
 
 
-@app.route('/api/claude/tools/<name>/toggle', methods=['POST'])
+@app.route("/api/claude/tools/<name>/toggle", methods=["POST"])
 @requires_auth
 def toggle_tool(name):
     """Toggle a tool on/off."""
@@ -1664,7 +1757,7 @@ def toggle_tool(name):
     return jsonify({"success": True, "enabled": enabled})
 
 
-@app.route('/api/claude/hooks')
+@app.route("/api/claude/hooks")
 @requires_auth
 def get_hooks():
     """Get configured hooks."""
@@ -1675,19 +1768,23 @@ def get_hooks():
 
     for scope, settings in [("global", global_settings), ("project", project_settings)]:
         for hook in settings.get("hooks", []):
-            hooks.append({
-                "event": hook.get("event", ""),
-                "command": hook.get("command", ""),
-                "scope": scope
-            })
+            hooks.append(
+                {
+                    "event": hook.get("event", ""),
+                    "command": hook.get("command", ""),
+                    "scope": scope,
+                }
+            )
 
-    return jsonify({
-        "hooks": hooks,
-        "available_events": ["PreToolUse", "PostToolUse", "Notification", "Stop"]
-    })
+    return jsonify(
+        {
+            "hooks": hooks,
+            "available_events": ["PreToolUse", "PostToolUse", "Notification", "Stop"],
+        }
+    )
 
 
-@app.route('/api/claude/hooks', methods=['POST'])
+@app.route("/api/claude/hooks", methods=["POST"])
 @requires_auth
 def add_hook():
     """Add a new hook."""
@@ -1703,16 +1800,13 @@ def add_hook():
     if "hooks" not in settings:
         settings["hooks"] = []
 
-    settings["hooks"].append({
-        "event": event,
-        "command": command
-    })
+    settings["hooks"].append({"event": event, "command": command})
 
     save_claude_settings(settings, scope)
     return jsonify({"success": True})
 
 
-@app.route('/api/claude/hooks', methods=['DELETE'])
+@app.route("/api/claude/hooks", methods=["DELETE"])
 @requires_auth
 def delete_hook():
     """Delete a hook."""
@@ -1724,13 +1818,17 @@ def delete_hook():
     settings = load_claude_settings(scope)
     hooks = settings.get("hooks", [])
 
-    settings["hooks"] = [h for h in hooks if not (h.get("event") == event and h.get("command") == command)]
+    settings["hooks"] = [
+        h
+        for h in hooks
+        if not (h.get("event") == event and h.get("command") == command)
+    ]
     save_claude_settings(settings, scope)
 
     return jsonify({"success": True})
 
 
-@app.route('/api/claude/hooks', methods=['PUT'])
+@app.route("/api/claude/hooks", methods=["PUT"])
 @requires_auth
 def update_hook():
     """Update a hook."""
@@ -1750,8 +1848,11 @@ def update_hook():
     if old_scope != new_scope:
         # Remove from old scope
         old_settings = load_claude_settings(old_scope)
-        old_settings["hooks"] = [h for h in old_settings.get("hooks", [])
-                                  if not (h.get("event") == old_event and h.get("command") == old_command)]
+        old_settings["hooks"] = [
+            h
+            for h in old_settings.get("hooks", [])
+            if not (h.get("event") == old_event and h.get("command") == old_command)
+        ]
         save_claude_settings(old_settings, old_scope)
 
         # Add to new scope
@@ -1778,7 +1879,8 @@ def update_hook():
 # Webhook endpoints (for Polecats)
 # ===========================================
 
-@app.route('/api/webhook/polecat/started', methods=['POST'])
+
+@app.route("/api/webhook/polecat/started", methods=["POST"])
 def polecat_started():
     """Handle Polecat started webhook."""
     data = request.json
@@ -1786,7 +1888,7 @@ def polecat_started():
     return jsonify({"status": "ok"})
 
 
-@app.route('/api/webhook/polecat/progress', methods=['POST'])
+@app.route("/api/webhook/polecat/progress", methods=["POST"])
 def polecat_progress():
     """Handle Polecat progress webhook."""
     data = request.json
@@ -1794,7 +1896,7 @@ def polecat_progress():
     return jsonify({"status": "ok"})
 
 
-@app.route('/api/webhook/polecat/completed', methods=['POST'])
+@app.route("/api/webhook/polecat/completed", methods=["POST"])
 def polecat_completed():
     """Handle Polecat completed webhook."""
     data = request.json
@@ -1802,7 +1904,9 @@ def polecat_completed():
 
     # Refresh beads from git (Polecat may have pushed changes)
     if _project_dir:
-        subprocess.run(["git", "pull", "--rebase"], cwd=str(_project_dir), capture_output=True)
+        subprocess.run(
+            ["git", "pull", "--rebase"], cwd=str(_project_dir), capture_output=True
+        )
 
     return jsonify({"status": "ok"})
 
@@ -1811,15 +1915,12 @@ def polecat_completed():
 # Agents API
 # ===========================================
 
-@app.route('/api/agents')
+
+@app.route("/api/agents")
 @requires_auth
 def get_agents():
     """Get information about running agents."""
-    result = {
-        "subagents": [],
-        "polecats": [],
-        "containers": []
-    }
+    result = {"subagents": [], "polecats": [], "containers": []}
 
     try:
         # Check for subagent processes
@@ -1831,17 +1932,20 @@ def get_agents():
                         pid = int(pid_file.read_text().strip())
                         # Check if process is still running
                         import psutil
+
                         if psutil.pid_exists(pid):
                             proc = psutil.Process(pid)
                             create_time = datetime.fromtimestamp(proc.create_time())
                             duration = (datetime.now() - create_time).total_seconds()
 
-                            result["subagents"].append({
-                                "id": pid_file.stem,
-                                "status": "running",
-                                "feature_name": pid_file.stem.replace("_", " "),
-                                "duration": duration
-                            })
+                            result["subagents"].append(
+                                {
+                                    "id": pid_file.stem,
+                                    "status": "running",
+                                    "feature_name": pid_file.stem.replace("_", " "),
+                                    "duration": duration,
+                                }
+                            )
                     except:
                         # Clean up stale PID file
                         try:
@@ -1852,18 +1956,21 @@ def get_agents():
         # Check for Docker containers (project agents)
         try:
             import docker
+
             docker_client = docker.from_env()
             containers = docker_client.containers.list(all=True)
 
             for container in containers:
                 # Look for vibes project containers
-                if container.name.startswith('vibes-project-'):
-                    project_id = container.labels.get('vibes.project', 'unknown')
-                    result["containers"].append({
-                        "name": container.name,
-                        "status": container.status,
-                        "project_id": project_id
-                    })
+                if container.name.startswith("vibes-project-"):
+                    project_id = container.labels.get("vibes.project", "unknown")
+                    result["containers"].append(
+                        {
+                            "name": container.name,
+                            "status": container.status,
+                            "project_id": project_id,
+                        }
+                    )
         except:
             # Docker not available or not accessible
             pass
@@ -1875,12 +1982,14 @@ def get_agents():
             for state_file in polecat_state_dir.glob("*.json"):
                 try:
                     state = json.loads(state_file.read_text())
-                    result["polecats"].append({
-                        "id": state.get("id", state_file.stem),
-                        "machine_id": state.get("machine_id", "unknown"),
-                        "status": state.get("status", "unknown"),
-                        "convoy_id": state.get("convoy_id", "unknown")
-                    })
+                    result["polecats"].append(
+                        {
+                            "id": state.get("id", state_file.stem),
+                            "machine_id": state.get("machine_id", "unknown"),
+                            "status": state.get("status", "unknown"),
+                            "convoy_id": state.get("convoy_id", "unknown"),
+                        }
+                    )
                 except:
                     pass
 
@@ -1894,7 +2003,8 @@ def get_agents():
 # Quick Actions API
 # ===========================================
 
-@app.route('/api/skills/commit', methods=['POST'])
+
+@app.route("/api/skills/commit", methods=["POST"])
 @requires_auth
 def run_commit_skill():
     """Run the commit skill."""
@@ -1908,7 +2018,7 @@ def run_commit_skill():
             capture_output=True,
             text=True,
             cwd=str(_project_dir),
-            timeout=300
+            timeout=300,
         )
 
         if result.returncode == 0:
@@ -1924,7 +2034,7 @@ def run_commit_skill():
         return jsonify({"error": str(e)}), 500
 
 
-@app.route('/api/skills/retrospective', methods=['POST'])
+@app.route("/api/skills/retrospective", methods=["POST"])
 @requires_auth
 def run_retrospective_skill():
     """Run the retrospective skill."""
@@ -1938,7 +2048,7 @@ def run_retrospective_skill():
             capture_output=True,
             text=True,
             cwd=str(_project_dir),
-            timeout=300
+            timeout=300,
         )
 
         if result.returncode == 0:
@@ -1954,7 +2064,7 @@ def run_retrospective_skill():
         return jsonify({"error": str(e)}), 500
 
 
-@app.route('/api/git/create-pr', methods=['POST'])
+@app.route("/api/git/create-pr", methods=["POST"])
 @requires_auth
 def create_pull_request():
     """Create a pull request using git CLI."""
@@ -1970,7 +2080,7 @@ def create_pull_request():
             ["git", "branch", "--show-current"],
             capture_output=True,
             text=True,
-            cwd=str(_project_dir)
+            cwd=str(_project_dir),
         )
         current_branch = branch_result.stdout.strip()
 
@@ -1983,7 +2093,7 @@ def create_pull_request():
             capture_output=True,
             text=True,
             cwd=str(_project_dir),
-            timeout=60
+            timeout=60,
         )
 
         if pr_result.returncode == 0:
@@ -1992,14 +2102,16 @@ def create_pull_request():
             return jsonify({"error": f"PR creation failed: {pr_result.stderr}"}), 500
 
     except FileNotFoundError:
-        return jsonify({"error": "GitHub CLI (gh) not found. Please install it first."}), 500
+        return jsonify(
+            {"error": "GitHub CLI (gh) not found. Please install it first."}
+        ), 500
     except subprocess.CalledProcessError:
         return jsonify({"error": "GitHub CLI not available or not authenticated"}), 500
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 
-@app.route('/api/quality/check', methods=['POST'])
+@app.route("/api/quality/check", methods=["POST"])
 @requires_auth
 def run_quality_checks():
     """Run quality checks using quality gate tools."""
@@ -2013,7 +2125,7 @@ def run_quality_checks():
             capture_output=True,
             text=True,
             cwd=str(_project_dir),
-            timeout=180
+            timeout=180,
         )
 
         if quality_result.returncode == 0:
@@ -2030,9 +2142,11 @@ def run_quality_checks():
                     capture_output=True,
                     text=True,
                     cwd=str(_project_dir),
-                    timeout=60
+                    timeout=60,
                 )
-                checks.append(f"Lint: {'✅ Passed' if lint_result.returncode == 0 else '❌ Failed'}")
+                checks.append(
+                    f"Lint: {'✅ Passed' if lint_result.returncode == 0 else '❌ Failed'}"
+                )
 
                 # Try npm run type-check
                 type_result = subprocess.run(
@@ -2040,9 +2154,11 @@ def run_quality_checks():
                     capture_output=True,
                     text=True,
                     cwd=str(_project_dir),
-                    timeout=60
+                    timeout=60,
                 )
-                checks.append(f"Types: {'✅ Passed' if type_result.returncode == 0 else '❌ Failed'}")
+                checks.append(
+                    f"Types: {'✅ Passed' if type_result.returncode == 0 else '❌ Failed'}"
+                )
 
                 # Try npm test
                 test_result = subprocess.run(
@@ -2050,17 +2166,21 @@ def run_quality_checks():
                     capture_output=True,
                     text=True,
                     cwd=str(_project_dir),
-                    timeout=120
+                    timeout=120,
                 )
-                checks.append(f"Tests: {'✅ Passed' if test_result.returncode == 0 else '❌ Failed'}")
+                checks.append(
+                    f"Tests: {'✅ Passed' if test_result.returncode == 0 else '❌ Failed'}"
+                )
 
             except Exception:
                 checks.append("Basic checks not available")
 
-            return jsonify({
-                "success": True,
-                "output": f"Quality checks completed:\n" + "\n".join(checks)
-            })
+            return jsonify(
+                {
+                    "success": True,
+                    "output": f"Quality checks completed:\n" + "\n".join(checks),
+                }
+            )
 
     except subprocess.TimeoutExpired:
         return jsonify({"error": "Quality check timed out"}), 500
@@ -2075,59 +2195,67 @@ def run_quality_checks():
 # Configuration file mappings
 CONFIG_ROUTES = {
     "quality gates": {
-        "patterns": ["quality", "gates", "lint", "test", "checks", "verification", "qa"],
+        "patterns": [
+            "quality",
+            "gates",
+            "lint",
+            "test",
+            "checks",
+            "verification",
+            "qa",
+        ],
         "file_path": "/home/vibes/vibes/quality-gate.config.json",
-        "description": "Quality gates configuration - controls lint, test, and verification settings"
+        "description": "Quality gates configuration - controls lint, test, and verification settings",
     },
     "claude settings": {
         "patterns": ["claude", "settings", "config", "anthropic", "api"],
         "file_path": "/home/vibes/vibes/.claude/settings.json",
-        "description": "Claude Code settings - API configuration, model preferences, and behavior"
+        "description": "Claude Code settings - API configuration, model preferences, and behavior",
     },
     "mcp servers": {
         "patterns": ["mcp", "servers", "tools", "plugins", "model context protocol"],
         "file_path": "/home/vibes/vibes/.claude/mcp_servers.json",
-        "description": "MCP servers configuration - available tools and plugins"
+        "description": "MCP servers configuration - available tools and plugins",
     },
     "git hooks": {
         "patterns": ["git", "hooks", "pre-commit", "post-commit", "automation"],
         "file_path": "/home/vibes/vibes/hooks/",
-        "description": "Git hooks directory - automated scripts that run on git events"
+        "description": "Git hooks directory - automated scripts that run on git events",
     },
     "docker compose": {
         "patterns": ["docker", "compose", "containers", "services", "deployment"],
         "file_path": "/home/vibes/vibes/docker-compose.yml",
-        "description": "Docker Compose configuration - service definitions and deployment"
+        "description": "Docker Compose configuration - service definitions and deployment",
     },
     "package json": {
         "patterns": ["npm", "package", "dependencies", "scripts", "build"],
         "file_path": "/home/vibes/vibes/package.json",
-        "description": "Package configuration - dependencies, scripts, and project metadata"
+        "description": "Package configuration - dependencies, scripts, and project metadata",
     },
     "eslint config": {
         "patterns": ["eslint", "linting", "code style", "javascript", "typescript"],
         "file_path": "/home/vibes/vibes/.eslintrc.js",
-        "description": "ESLint configuration - JavaScript/TypeScript linting rules"
+        "description": "ESLint configuration - JavaScript/TypeScript linting rules",
     },
     "prettier config": {
         "patterns": ["prettier", "formatting", "code format", "style"],
         "file_path": "/home/vibes/vibes/.prettierrc",
-        "description": "Prettier configuration - automatic code formatting settings"
+        "description": "Prettier configuration - automatic code formatting settings",
     },
     "typescript config": {
         "patterns": ["typescript", "tsconfig", "types", "compilation"],
         "file_path": "/home/vibes/vibes/tsconfig.json",
-        "description": "TypeScript configuration - compilation settings and type checking"
+        "description": "TypeScript configuration - compilation settings and type checking",
     },
     "vite config": {
         "patterns": ["vite", "build tool", "frontend build", "development server"],
         "file_path": "/home/vibes/vibes/vite.config.ts",
-        "description": "Vite configuration - build tool and development server settings"
-    }
+        "description": "Vite configuration - build tool and development server settings",
+    },
 }
 
 
-@app.route('/api/config/route', methods=['POST'])
+@app.route("/api/config/route", methods=["POST"])
 @requires_auth
 def route_config_request():
     """Route a natural language config request to the appropriate file."""
@@ -2163,11 +2291,13 @@ def route_config_request():
 
     if not best_match or best_score == 0:
         # Fallback - suggest most common config files
-        return jsonify({
-            "file_path": "/home/vibes/vibes/.claude/settings.json",
-            "description": "No specific match found. Try: 'quality gates', 'mcp servers', 'git hooks', 'claude settings'",
-            "suggested_change": "Be more specific about what you want to configure"
-        })
+        return jsonify(
+            {
+                "file_path": "/home/vibes/vibes/.claude/settings.json",
+                "description": "No specific match found. Try: 'quality gates', 'mcp servers', 'git hooks', 'claude settings'",
+                "suggested_change": "Be more specific about what you want to configure",
+            }
+        )
 
     config_name, config_info = best_match
     file_path = config_info["file_path"]
@@ -2182,17 +2312,19 @@ def route_config_request():
     # Generate suggested changes based on common requests
     suggested_change = None
     if "add" in query and "mcp" in query:
-        suggested_change = 'Add new MCP server: {"name": {"command": "your-command", "args": []}}'
+        suggested_change = (
+            'Add new MCP server: {"name": {"command": "your-command", "args": []}}'
+        )
     elif "quality" in query and ("enable" in query or "disable" in query):
         suggested_change = 'Modify "enabled" field or add to "deniedTools" array'
     elif "hook" in query:
-        suggested_change = 'Add git hook script or modify existing hook permissions'
+        suggested_change = "Add git hook script or modify existing hook permissions"
     elif "docker" in query:
-        suggested_change = 'Modify service definitions or add new services'
+        suggested_change = "Modify service definitions or add new services"
 
     # Determine section if it's a JSON file
     section = None
-    if file_path.endswith('.json'):
+    if file_path.endswith(".json"):
         if "mcp" in query:
             section = "mcpServers"
         elif "hook" in query:
@@ -2200,12 +2332,14 @@ def route_config_request():
         elif "tool" in query:
             section = "deniedTools"
 
-    return jsonify({
-        "file_path": file_path,
-        "section": section,
-        "description": config_info["description"],
-        "suggested_change": suggested_change
-    })
+    return jsonify(
+        {
+            "file_path": file_path,
+            "section": section,
+            "description": config_info["description"],
+            "suggested_change": suggested_change,
+        }
+    )
 
 
 # ===========================================
@@ -2213,7 +2347,8 @@ def route_config_request():
 # ===========================================
 
 if WEBSOCKET_ENABLED:
-    @socketio.on('connect')
+
+    @socketio.on("connect")
     def handle_connect():
         """Handle WebSocket connection."""
         print(f"[ws] Client connected: {request.sid}")
@@ -2221,93 +2356,119 @@ if WEBSOCKET_ENABLED:
         if _bead_store:
             beads = _bead_store.load_all()
             board = {"todo": [], "in_progress": [], "review": [], "done": []}
-            status_map = {"pending": "todo", "in_progress": "in_progress",
-                          "needs_review": "review", "passing": "done"}
+            status_map = {
+                "pending": "todo",
+                "in_progress": "in_progress",
+                "needs_review": "review",
+                "passing": "done",
+            }
             for bead in beads:
-                status = bead.status.value if isinstance(bead.status, BeadStatus) else bead.status
+                status = (
+                    bead.status.value
+                    if isinstance(bead.status, BeadStatus)
+                    else bead.status
+                )
                 column = status_map.get(status, "todo")
                 board[column].append(bead.to_feature_dict())
-            ws_emit('board:update', {'board': board, 'stats': _bead_store.get_stats()})
+            ws_emit("board:update", {"board": board, "stats": _bead_store.get_stats()})
 
-    @socketio.on('disconnect')
+    @socketio.on("disconnect")
     def handle_disconnect():
         """Handle WebSocket disconnection."""
         print(f"[ws] Client disconnected: {request.sid}")
 
-    @socketio.on('subscribe')
+    @socketio.on("subscribe")
     def handle_subscribe(data):
         """Subscribe to specific event types."""
-        room = data.get('room', 'all')
+        room = data.get("room", "all")
         join_room(room)
         print(f"[ws] Client {request.sid} joined room: {room}")
 
-    @socketio.on('unsubscribe')
+    @socketio.on("unsubscribe")
     def handle_unsubscribe(data):
         """Unsubscribe from event types."""
-        room = data.get('room', 'all')
+        room = data.get("room", "all")
         leave_room(room)
 
-    @socketio.on('chat:send')
+    @socketio.on("chat:send")
     def handle_chat_send(data):
         """Handle chat message via WebSocket with streaming response."""
-        message = data.get('message', '')
+        message = data.get("message", "")
         if not message:
-            ws_emit('chat:error', {'error': 'No message provided'})
+            ws_emit("chat:error", {"error": "No message provided"})
             return
 
         # Add user message
         history = load_chat_history()
-        history.append({
-            "role": "user",
-            "content": message,
-            "timestamp": datetime.now().isoformat()
-        })
+        history.append(
+            {
+                "role": "user",
+                "content": message,
+                "timestamp": datetime.now().isoformat(),
+            }
+        )
         save_chat_history(history[-100:])
 
         # Echo user message back
-        ws_emit('chat:message', {'role': 'user', 'content': message})
+        ws_emit("chat:message", {"role": "user", "content": message})
 
         # Build context and run Claude with streaming
         context = build_chat_context()
 
         def stream_callback(chunk: str):
             """Callback for streaming chunks."""
-            socketio.emit('chat:stream', {'chunk': chunk}, room=request.sid)
+            socketio.emit("chat:stream", {"chunk": chunk}, room=request.sid)
 
         # Run in thread to not block
         def run_claude_stream():
             try:
-                response = run_claude_prompt_streaming(message, context, history[:-1], stream_callback)
+                response = run_claude_prompt_streaming(
+                    message, context, history[:-1], stream_callback
+                )
                 # Save final response
                 history = load_chat_history()
-                history.append({
-                    "role": "assistant",
-                    "content": response,
-                    "timestamp": datetime.now().isoformat()
-                })
+                history.append(
+                    {
+                        "role": "assistant",
+                        "content": response,
+                        "timestamp": datetime.now().isoformat(),
+                    }
+                )
                 save_chat_history(history[-100:])
-                socketio.emit('chat:stream:end', {'content': response}, room=request.sid)
+                socketio.emit(
+                    "chat:stream:end", {"content": response}, room=request.sid
+                )
             except Exception as e:
-                socketio.emit('chat:error', {'error': str(e)}, room=request.sid)
+                socketio.emit("chat:error", {"error": str(e)}, room=request.sid)
 
         threading.Thread(target=run_claude_stream, daemon=True).start()
 
-    @socketio.on('board:refresh')
+    @socketio.on("board:refresh")
     def handle_board_refresh():
         """Request board refresh."""
         if _bead_store:
             beads = _bead_store.load_all()
             board = {"todo": [], "in_progress": [], "review": [], "done": []}
-            status_map = {"pending": "todo", "in_progress": "in_progress",
-                          "needs_review": "review", "passing": "done"}
+            status_map = {
+                "pending": "todo",
+                "in_progress": "in_progress",
+                "needs_review": "review",
+                "passing": "done",
+            }
             for bead in beads:
-                status = bead.status.value if isinstance(bead.status, BeadStatus) else bead.status
+                status = (
+                    bead.status.value
+                    if isinstance(bead.status, BeadStatus)
+                    else bead.status
+                )
                 column = status_map.get(status, "todo")
                 board[column].append(bead.to_feature_dict())
-            ws_emit('board:update', {'board': board, 'stats': _bead_store.get_stats()})
+            ws_emit("board:update", {"board": board, "stats": _bead_store.get_stats()})
 
 
-def run_claude_prompt_streaming(message: str, context: str, history: list, callback) -> str:
+def run_claude_prompt_streaming(
+    message: str, context: str, history: list, callback
+) -> str:
     """Run Claude prompt with streaming output."""
     global _current_claude_process
 
@@ -2318,7 +2479,7 @@ def run_claude_prompt_streaming(message: str, context: str, history: list, callb
         history_lines = []
         for msg in recent:
             role = "User" if msg["role"] == "user" else "Assistant"
-            content = msg['content']
+            content = msg["content"]
             if len(content) > 300:
                 content = content[:300] + "..."
             history_lines.append(f"{role}: {content}")
@@ -2335,7 +2496,8 @@ Respond helpfully and concisely."""
 
     try:
         import tempfile
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
             f.write(full_prompt)
             prompt_file = f.name
         os.chmod(prompt_file, 0o644)
@@ -2351,19 +2513,19 @@ Respond helpfully and concisely."""
             cwd=str(_project_dir),
             env={**os.environ, "HOME": "/home/vibes"},
             shell=True,
-            bufsize=1
+            bufsize=1,
         )
 
         output_chunks = []
         buffer = ""
 
         # Stream character by character for real-time output
-        for char in iter(lambda: _current_claude_process.stdout.read(1), ''):
+        for char in iter(lambda: _current_claude_process.stdout.read(1), ""):
             buffer += char
             output_chunks.append(char)
 
             # Send chunk on newline or every 50 chars
-            if char == '\n' or len(buffer) >= 50:
+            if char == "\n" or len(buffer) >= 50:
                 callback(buffer)
                 buffer = ""
 
@@ -2373,7 +2535,7 @@ Respond helpfully and concisely."""
 
         _current_claude_process.wait()
 
-        return ''.join(output_chunks).strip()
+        return "".join(output_chunks).strip()
 
     except Exception as e:
         return f"Error: {str(e)}"
@@ -2389,7 +2551,8 @@ Respond helpfully and concisely."""
 # SSE Endpoints (Server-Sent Events)
 # ===========================================
 
-@app.route('/api/stream/events')
+
+@app.route("/api/stream/events")
 @requires_auth
 def stream_events():
     """
@@ -2402,16 +2565,16 @@ def stream_events():
     stream = SSEStream(event_bus)
     return Response(
         stream.generate(),
-        mimetype='text/event-stream',
+        mimetype="text/event-stream",
         headers={
-            'Cache-Control': 'no-cache',
-            'X-Accel-Buffering': 'no',
-            'Connection': 'keep-alive'
-        }
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
     )
 
 
-@app.route('/api/stream/chat', methods=['POST'])
+@app.route("/api/stream/chat", methods=["POST"])
 @requires_auth
 def stream_chat():
     """
@@ -2427,11 +2590,9 @@ def stream_chat():
 
     # Add user message
     history = load_chat_history()
-    history.append({
-        "role": "user",
-        "content": message,
-        "timestamp": datetime.now().isoformat()
-    })
+    history.append(
+        {"role": "user", "content": message, "timestamp": datetime.now().isoformat()}
+    )
     save_chat_history(history[-100:])
 
     # Build context
@@ -2444,7 +2605,11 @@ def stream_chat():
         history_lines = []
         for msg in recent:
             role = "User" if msg["role"] == "user" else "Assistant"
-            content = msg['content'][:300] + "..." if len(msg['content']) > 300 else msg['content']
+            content = (
+                msg["content"][:300] + "..."
+                if len(msg["content"]) > 300
+                else msg["content"]
+            )
             history_lines.append(f"{role}: {content}")
         if history_lines:
             history_text = "\n\n## Recent Conversation:\n" + "\n\n".join(history_lines)
@@ -2463,7 +2628,10 @@ Respond helpfully and concisely."""
 
         try:
             import tempfile
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
+
+            with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".txt", delete=False
+            ) as f:
                 f.write(full_prompt)
                 prompt_file = f.name
             os.chmod(prompt_file, 0o644)
@@ -2479,15 +2647,15 @@ Respond helpfully and concisely."""
                 cwd=str(_project_dir),
                 env={**os.environ, "HOME": "/home/vibes"},
                 shell=True,
-                bufsize=1
+                bufsize=1,
             )
 
             buffer = ""
-            for char in iter(lambda: _current_claude_process.stdout.read(1), ''):
+            for char in iter(lambda: _current_claude_process.stdout.read(1), ""):
                 buffer += char
                 full_response.append(char)
 
-                if char == '\n' or len(buffer) >= 30:
+                if char == "\n" or len(buffer) >= 30:
                     yield f"event: chunk\ndata: {json.dumps({'text': buffer})}\n\n"
                     buffer = ""
 
@@ -2497,13 +2665,15 @@ Respond helpfully and concisely."""
             _current_claude_process.wait()
 
             # Save complete response
-            complete_response = ''.join(full_response).strip()
+            complete_response = "".join(full_response).strip()
             history = load_chat_history()
-            history.append({
-                "role": "assistant",
-                "content": complete_response,
-                "timestamp": datetime.now().isoformat()
-            })
+            history.append(
+                {
+                    "role": "assistant",
+                    "content": complete_response,
+                    "timestamp": datetime.now().isoformat(),
+                }
+            )
             save_chat_history(history[-100:])
 
             yield f"event: done\ndata: {json.dumps({'content': complete_response})}\n\n"
@@ -2519,15 +2689,12 @@ Respond helpfully and concisely."""
 
     return Response(
         generate(),
-        mimetype='text/event-stream',
-        headers={
-            'Cache-Control': 'no-cache',
-            'X-Accel-Buffering': 'no'
-        }
+        mimetype="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
 
-@app.route('/api/stream/logs')
+@app.route("/api/stream/logs")
 @requires_auth
 def stream_logs():
     """
@@ -2535,7 +2702,7 @@ def stream_logs():
 
     Polls for new logs every second and streams them.
     """
-    filter_type = request.args.get('filter', 'all')
+    filter_type = request.args.get("filter", "all")
     last_id = None
 
     def generate():
@@ -2548,20 +2715,27 @@ def stream_logs():
 
         while True:
             try:
-                debug_dir = Path.home() / '.claude' / 'debug'
+                debug_dir = Path.home() / ".claude" / "debug"
                 logs = []
 
                 if debug_dir.exists():
-                    debug_files = sorted(debug_dir.glob('*.txt'), key=lambda f: f.stat().st_mtime, reverse=True)[:3]
+                    debug_files = sorted(
+                        debug_dir.glob("*.txt"),
+                        key=lambda f: f.stat().st_mtime,
+                        reverse=True,
+                    )[:3]
 
                     for debug_file in debug_files:
                         try:
                             content = debug_file.read_text()
-                            for line in content.split('\n')[-50:]:  # Last 50 lines
+                            for line in content.split("\n")[-50:]:  # Last 50 lines
                                 if not line.strip():
                                     continue
 
-                                match = re.match(r'^(\d{4}-\d{2}-\d{2}T[\d:.]+Z)\s+\[(\w+)\]\s+(.*)$', line)
+                                match = re.match(
+                                    r"^(\d{4}-\d{2}-\d{2}T[\d:.]+Z)\s+\[(\w+)\]\s+(.*)$",
+                                    line,
+                                )
                                 if match:
                                     timestamp, level, message = match.groups()
                                     log_id = f"{debug_file.stem}_{hash(line)}"
@@ -2570,22 +2744,28 @@ def stream_logs():
                                         continue
 
                                     level = level.lower()
-                                    source = 'claude' if 'mcp' in message.lower() else 'system'
+                                    source = (
+                                        "claude"
+                                        if "mcp" in message.lower()
+                                        else "system"
+                                    )
 
-                                    if filter_type == 'error' and level != 'error':
+                                    if filter_type == "error" and level != "error":
                                         continue
-                                    elif filter_type == 'claude' and source != 'claude':
+                                    elif filter_type == "claude" and source != "claude":
                                         continue
-                                    elif filter_type == 'system' and source != 'system':
+                                    elif filter_type == "system" and source != "system":
                                         continue
 
-                                    logs.append({
-                                        'id': log_id,
-                                        'timestamp': timestamp,
-                                        'level': level,
-                                        'source': source,
-                                        'message': message[:500]
-                                    })
+                                    logs.append(
+                                        {
+                                            "id": log_id,
+                                            "timestamp": timestamp,
+                                            "level": level,
+                                            "source": source,
+                                            "message": message[:500],
+                                        }
+                                    )
                                     last_id = log_id
                         except:
                             pass
@@ -2596,6 +2776,7 @@ def stream_logs():
                     yield f": heartbeat\n\n"
 
                 import time
+
                 time.sleep(1)
 
             except GeneratorExit:
@@ -2603,42 +2784,40 @@ def stream_logs():
 
     return Response(
         generate(),
-        mimetype='text/event-stream',
-        headers={
-            'Cache-Control': 'no-cache',
-            'X-Accel-Buffering': 'no'
+        mimetype="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.route("/api/realtime/status")
+@requires_auth
+def realtime_status():
+    """Get real-time system status."""
+    return jsonify(
+        {
+            "websocket_enabled": WEBSOCKET_ENABLED,
+            "sse_enabled": True,
+            "endpoints": {
+                "websocket": "/socket.io" if WEBSOCKET_ENABLED else None,
+                "sse_events": "/api/stream/events",
+                "sse_chat": "/api/stream/chat",
+                "sse_logs": "/api/stream/logs",
+            },
         }
     )
 
 
-@app.route('/api/realtime/status')
-@requires_auth
-def realtime_status():
-    """Get real-time system status."""
-    return jsonify({
-        "websocket_enabled": WEBSOCKET_ENABLED,
-        "sse_enabled": True,
-        "endpoints": {
-            "websocket": "/socket.io" if WEBSOCKET_ENABLED else None,
-            "sse_events": "/api/stream/events",
-            "sse_chat": "/api/stream/chat",
-            "sse_logs": "/api/stream/logs"
-        }
-    })
-
-
-@app.route('/api/tasks/progress')
+@app.route("/api/tasks/progress")
 @requires_auth
 def get_task_progress():
     """Get current task progress for all active tasks."""
-    return jsonify({
-        "tasks": progress_tracker.get_all_progress()
-    })
+    return jsonify({"tasks": progress_tracker.get_all_progress()})
 
 
 # ===========================================
 # Broadcast helpers for emitting events
 # ===========================================
+
 
 def broadcast_board_update():
     """Broadcast board update to all connected clients."""
@@ -2647,19 +2826,25 @@ def broadcast_board_update():
 
     beads = _bead_store.load_all()
     board = {"todo": [], "in_progress": [], "review": [], "done": []}
-    status_map = {"pending": "todo", "in_progress": "in_progress",
-                  "needs_review": "review", "passing": "done"}
+    status_map = {
+        "pending": "todo",
+        "in_progress": "in_progress",
+        "needs_review": "review",
+        "passing": "done",
+    }
 
     for bead in beads:
-        status = bead.status.value if isinstance(bead.status, BeadStatus) else bead.status
+        status = (
+            bead.status.value if isinstance(bead.status, BeadStatus) else bead.status
+        )
         column = status_map.get(status, "todo")
         board[column].append(bead.to_feature_dict())
 
-    data = {'board': board, 'stats': _bead_store.get_stats()}
+    data = {"board": board, "stats": _bead_store.get_stats()}
 
     # WebSocket broadcast
     if WEBSOCKET_ENABLED:
-        socketio.emit('board:update', data)
+        socketio.emit("board:update", data)
 
     # SSE broadcast via event bus
     emit_board_update(data)
@@ -2673,14 +2858,25 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description="Vibes Frontend Server")
-    parser.add_argument("--project", "-p", type=str, default=".",
-                        help="Project directory (default: current)")
-    parser.add_argument("--projects-root", type=str, default=None,
-                        help="Root directory containing all projects (for switching)")
-    parser.add_argument("--port", type=int, default=3000,
-                        help="Port to listen on (default: 3000)")
-    parser.add_argument("--host", type=str, default="0.0.0.0",
-                        help="Host to bind to (default: 0.0.0.0)")
+    parser.add_argument(
+        "--project",
+        "-p",
+        type=str,
+        default=".",
+        help="Project directory (default: current)",
+    )
+    parser.add_argument(
+        "--projects-root",
+        type=str,
+        default=None,
+        help="Root directory containing all projects (for switching)",
+    )
+    parser.add_argument(
+        "--port", type=int, default=3000, help="Port to listen on (default: 3000)"
+    )
+    parser.add_argument(
+        "--host", type=str, default="0.0.0.0", help="Host to bind to (default: 0.0.0.0)"
+    )
 
     args = parser.parse_args()
 
@@ -2700,11 +2896,15 @@ if __name__ == "__main__":
     init_app(str(project_dir), projects_root)
 
     print(f"[vibes-frontend] Starting server on http://{args.host}:{args.port}")
-    print(f"[vibes-frontend] WebSocket: {'enabled' if WEBSOCKET_ENABLED else 'disabled'}")
+    print(
+        f"[vibes-frontend] WebSocket: {'enabled' if WEBSOCKET_ENABLED else 'disabled'}"
+    )
     print(f"[vibes-frontend] SSE: enabled")
 
     # Use SocketIO if available for WebSocket support, otherwise plain Flask
     if WEBSOCKET_ENABLED:
-        socketio.run(app, host=args.host, port=args.port, debug=False, allow_unsafe_werkzeug=True)
+        socketio.run(
+            app, host=args.host, port=args.port, debug=False, allow_unsafe_werkzeug=True
+        )
     else:
         app.run(host=args.host, port=args.port, debug=False)
