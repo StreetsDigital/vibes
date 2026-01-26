@@ -1403,7 +1403,7 @@ def run_autonomous_claude(parallel_agents: int = 1):
             "stderr": subprocess.STDOUT,  # Combine stderr with stdout
             "text": True,
             "cwd": str(_project_dir),
-            "env": {**os.environ, "HOME": "/home/vibes"},
+            "env": {**os.environ, "HOME": "/home/vibes", "VIBES_USE_BEADS": "true"},
             "shell": True,
             "bufsize": 1,  # Line buffered
         }
